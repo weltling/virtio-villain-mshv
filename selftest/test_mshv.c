@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static int types[4096], indices[4096], next_fd = 20, open_fds;
 static int vp_created[2], references, calls, fail_at, corrupt_read, close_failure;

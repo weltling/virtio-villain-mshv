@@ -9,7 +9,7 @@
  * verifying idempotency. Set/get RAX must preserve 0x123456789abcdef0 exactly,
  * demonstrating usable resources rather than just successful allocation.
  */
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t lifecycle(struct mshv_fixture *f)
 {

@@ -12,7 +12,7 @@
  * Every allocation and operation must succeed. Passing observes no exhaustion
  * over these cycles, but cannot prove complete hypervisor resource cleanup.
  */
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t repeated(struct mshv_fixture *f)
 {

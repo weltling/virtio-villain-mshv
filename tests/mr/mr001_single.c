@@ -9,7 +9,7 @@
  * mixed pattern. Both IOCTLs must return zero and preserve all 64 bits exactly.
  * This general purpose register needs no normalization or reserved bit mask.
  */
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t single(struct mshv_fixture *f)
 {

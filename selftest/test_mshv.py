@@ -2,18 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Private contract and IOCTL-fixture checks; generic runner tests live upstream."""
 
+import importlib.util
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK = ROOT.parent / "virtio-villain"
-sys.path.insert(0, str(ROOT))
-from mshv import contract  # noqa: E402
+spec = importlib.util.spec_from_file_location("mshv_contract", ROOT / "lib/contract.py")
+contract = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(contract)
 
 
 class ContractTests(unittest.TestCase):
@@ -58,7 +59,7 @@ class FixtureTests(unittest.TestCase):
             binary = root / "test-mshv"
             command = ["cc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
                        "-I", str(FRAMEWORK), "-I", str(root), str(ROOT / "selftest/test_mshv.c"),
-                       str(ROOT / "mshv/lifecycle.c"), str(ROOT / "mshv/registers.c"),
+                       str(ROOT / "lib/lifecycle.c"), str(ROOT / "lib/registers.c"),
                        *(str(source) for source in sorted((ROOT / "tests").glob("*/*.c"))),
                        "-Wl,--wrap=open,--wrap=close,--wrap=fcntl,--wrap=ioctl",
                        "-o", str(binary)]

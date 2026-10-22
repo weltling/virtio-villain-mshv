@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <cpuid.h>
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static int preflight(void)
 {

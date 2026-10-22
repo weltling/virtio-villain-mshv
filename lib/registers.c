@@ -11,7 +11,7 @@
 #include <inttypes.h>
 #include <string.h>
 
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 test_result_t mshv_roundtrip(struct mshv_fixture *f, unsigned count, uint64_t seed)
 {

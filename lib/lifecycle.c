@@ -12,7 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 test_result_t mshv_expect_ioctl(int fd, unsigned long request, void *arg,
                               const char *operation, int expected_errno)

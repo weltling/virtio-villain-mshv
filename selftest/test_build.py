@@ -21,10 +21,10 @@ class BuildTests(unittest.TestCase):
             with self.subTest(goals=goals), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 framework = root / "framework"
-                (root / "mshv").mkdir()
+                (root / "lib").mkdir()
                 (framework / "lib").mkdir(parents=True)
                 events = root / "events"
-                (root / "mshv/contract.py").write_text(
+                (root / "lib/contract.py").write_text(
                     "from pathlib import Path\n"
                     "import sys\n"
                     f"with Path({str(events)!r}).open('a') as stream:\n"

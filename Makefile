@@ -6,12 +6,12 @@ TARGET ?= target
 MSHV_SOURCE ?= $(HOME)/linux
 VV_ROOT ?= $(HOME)/virtio-villain
 TEST_SRCS = $(sort $(wildcard tests/*/*.c))
-SRCS = bin/mshv.c mshv/lifecycle.c mshv/registers.c $(TEST_SRCS)
+SRCS = bin/mshv.c lib/lifecycle.c lib/registers.c $(TEST_SRCS)
 
 .DEFAULT_GOAL := initramfs
 
 contract:
-	python3 mshv/contract.py --source "$(MSHV_SOURCE)" --output "$(TARGET)/mshv/contract.h"
+	python3 lib/contract.py --source "$(MSHV_SOURCE)" --output "$(TARGET)/mshv/contract.h"
 
 init: contract
 	$(MAKE) -C "$(VV_ROOT)" appliance CC="$(CC)" \
@@ -36,6 +36,6 @@ selftest:
 	python3 -m unittest discover -s selftest -p 'test_*.py'
 
 lint:
-	python3 -m flake8 run-mshv launch-nested suite.py mshv selftest
+	python3 -m flake8 run-mshv launch-nested lib selftest
 
 .PHONY: contract init initramfs mshv mshv-initramfs kernel selftest lint

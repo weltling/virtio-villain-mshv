@@ -18,7 +18,7 @@
  * This checks continued usability without assuming atomicity or rollback.
  */
 #include <errno.h>
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t negative(struct mshv_fixture *f)
 {

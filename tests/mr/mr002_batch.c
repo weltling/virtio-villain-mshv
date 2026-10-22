@@ -10,7 +10,7 @@
  * Only valid batches are submitted, so this makes no atomicity claim for
  * mixed-validity requests.
  */
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t batch(struct mshv_fixture *f)
 {

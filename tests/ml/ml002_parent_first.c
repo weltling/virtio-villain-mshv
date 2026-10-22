@@ -9,7 +9,7 @@
  * RAX through the surviving VP with exact value 0xfedcba9876543210.
  * The VP's partition reference must survive closure of both parent FDs.
  */
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t parent_first(struct mshv_fixture *f)
 {

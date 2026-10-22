@@ -11,7 +11,7 @@
  * Index reuse is not expected before partition destruction.
  */
 #include <errno.h>
-#include "mshv/test.h"
+#include "lib/mshv.h"
 
 static test_result_t vp_first(struct mshv_fixture *f)
 {
