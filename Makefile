@@ -26,9 +26,9 @@ kernel:
 	  --cache-dir "$(abspath $(TARGET))/kernel-cache" --offline --jobs "$$(nproc)"
 
 selftest:
-	python3 -m unittest discover -s selftest -p 'test_mshv.py'
+	python3 -m unittest discover -s selftest -p 'test_*.py'
 
 lint:
-	python3 -m flake8 run-mshv suite.py mshv selftest
+	python3 -m flake8 run-mshv launch-nested suite.py mshv selftest
 
 .PHONY: contract mshv mshv-initramfs kernel selftest lint
