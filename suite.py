@@ -3,13 +3,16 @@
 
 import os
 from pathlib import Path
-from lib.appliance import Suite
+from lib.appliance import Suite, source_catalog
 from mshv.contract import COMMIT
 
 ROOT = Path(__file__).resolve().parent
 
 
 class MshvSuite(Suite):
+    def list_tests(self, binary):
+        return source_catalog(ROOT.glob("tests/*/*.c"), "REGISTER_MSHV_TEST")
+
     def add_arguments(self, parser):
         backend = parser.add_mutually_exclusive_group()
         backend.add_argument("--vmm", default="cloud-hypervisor",

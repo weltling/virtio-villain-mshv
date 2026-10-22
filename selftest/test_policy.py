@@ -18,6 +18,20 @@ import suite as mshv_suite  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
+    def test_source_listing_without_an_appliance_binary(self):
+        output = io.StringIO()
+        with patch.object(appliance.subprocess, "run",
+                          side_effect=AssertionError("Listing must not execute a binary")), \
+             contextlib.redirect_stdout(output):
+            status = appliance.main([
+                "--suite", str(ROOT / "suite.py"),
+                "--binary", "/nonexistent/mshv-init", "--list"])
+        self.assertEqual(status, 0)
+        entries = appliance.parse_catalog(output.getvalue())
+        self.assertEqual(list(entries), [
+            "ML001", "ML002", "ML003", "ML004", "MR001", "MR002", "MR003"])
+        self.assertTrue(all(entries.values()))
+
     def test_nested_execution_without_external_control(self):
         suite = mshv_suite.create_suite()
         with tempfile.TemporaryDirectory() as work:
