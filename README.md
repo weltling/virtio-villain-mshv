@@ -79,8 +79,9 @@ already supplies these. It is not replaced by a minimal custom profile.
 
 ### Nested feasibility status
 
-The required model is host VMM -> selected Linux test appliance -> partitions
-created by the UAPI tests. Ordinary nested VMX/SVM support is not sufficient.
+The validated model is host VMM -> nested Hyper-V -> selected Linux test
+appliance -> partitions created by the UAPI tests. Ordinary nested VMX/SVM
+support is not sufficient.
 
 - Local Cloud Hypervisor `bb5f54912e45f3b9878d0e8e4c8884bd4b4bf21b` implements
   `--cpus nested=on` in its MSHV backend, setting the nested partition creation
@@ -91,8 +92,7 @@ created by the UAPI tests. Ordinary nested VMX/SVM support is not sufficient.
   supply a Linux kernel UAPI inside the payload and is not a replacement for
   this appliance.
 
-Cloud Hypervisor is a candidate launcher, not a validated nested parent
-environment. A nested boot with local Cloud Hypervisor commit
+Direct Linux boot with local Cloud Hypervisor commit
 `bb5f54912e45f3b9878d0e8e4c8884bd4b4bf21b` reached the appliance entry point
 on the selected kernel and shut down cleanly. CPUID `0x40000003` returned
 EBX `0x00020000`. The `CreatePartitions` bit was absent, so preflight reported
@@ -102,7 +102,8 @@ Thus `nested=on` on this launcher is not enough to run these UAPI tests.
 Do not bypass the privilege check or change the expected test results.
 An external `--launcher` can supply an appropriately
 provisioned Hyper-V environment without changing the suite or framework.
-Do not claim nested support until actual child partition creation succeeds.
+The nested Hyper-V boot image described below supplies that environment.
+Actual child partition creation and all seven UAPI tests passed with it.
 
 ## Build
 
@@ -150,9 +151,11 @@ python3 mshv/boot_image.py --output target/nested-hyperv/appliance
 
 The builder reads the host ESP and copies the installed shim, GRUB and
 Hyper-V loaders. It also copies both CPU vendor hypervisor binaries and
-`kdstub.dll`. Protected inputs are read through `sudo -n`. No host boot
-files or firmware settings are modified. No additional boot components
-are downloaded or installed.
+`kdstub.dll`. All inputs must be readable by the current user. The builder
+never elevates privileges. Use `--esp PATH` to select a readable copy of
+the ESP components, or set `MSHV_ESP` for both the builder and launcher.
+No host boot files or firmware settings are modified. No additional boot
+components are downloaded or installed.
 
 The output directory contains `boot.img`, `firmware.fd`, `grub.cfg` and
 `manifest.json`. The manifest records source paths and hashes. Temporary
@@ -183,14 +186,24 @@ An initial nested Hyper-V boot reached the selected kernel. Guest CPUID
 `0x40000003` returned EBX `0x002bb9ff`. Preflight created a child partition
 and VP, and `ML001` returned PASS. The kernel then hit a BUG in
 `hv_machine_power_off` during shutdown. The launcher timed out, so the
-overall run was an infrastructure failure. Clean shutdown and full suite
-validation remain unresolved.
+overall run was an infrastructure failure.
+
+The suite now uses explicit host controlled shutdown. After tests release
+their resources and report results, the guest synchronizes and signals that
+it is ready to stop. The runner validates the results and stop marker before
+terminating Cloud Hypervisor. The guest does not enter the broken poweroff
+path. This tests UAPI operation, not the kernel poweroff implementation.
+All seven lifecycle and register tests passed in separate nested Hyper-V
+boots on 2026-10-22 using this shutdown mode. Each guest completed its
+result protocol and stop handshake without a kernel panic. The tested
+kernel contract is commit `d461acfb591c198755f6e84494f8a68a3b6d8bd2`.
+Repeated full suite runs remain outstanding.
 
 ### Direct Linux boot
 
-Initial nested runs can proceed without external recovery. The runner warns
-when none is configured and still enforces the process timeout. This can
-terminate a stuck launcher but cannot recover a hung outer host.
+Initial nested runs can proceed without external recovery. The runner
+enforces a process timeout. This can terminate a stuck launcher but cannot
+recover a hung outer host.
 
 External watchdog and recovery design remains separate work. When available,
 select a real external control with `--control EXECUTABLE`. The interface is
@@ -274,8 +287,9 @@ resource exhaustion during those cycles. Descriptor closure does not prove
 complete hypervisor cleanup. This API exposes no definitive cleanup completion
 observation for these tests.
 
-The selected kernel and appliance have booted under the candidate launcher.
-The required parent partition privileges were absent. Real IOCTL execution
-and repeated successful suite runs remain unverified acceptance checks.
-A successful build, host selftest, or ordinary guest boot does not satisfy
-them.
+The selected kernel and appliance have booted beneath nested Hyper-V.
+Parent partition privileges and actual child partition creation succeeded.
+All seven tests passed against the real kernel UAPI in separate boots.
+Repeated successful full suite runs remain an unverified acceptance check.
+A successful build, host selftest, or ordinary guest boot alone does not
+satisfy appliance validation.
