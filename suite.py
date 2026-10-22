@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""MSHV-specific policy; orchestration and reporting belong to Virtio Villain."""
+"""MSHV launch policy using Virtio Villain orchestration and reporting."""
 
 import os
 from pathlib import Path
+import sys
 from lib.appliance import Suite
 from mshv.contract import COMMIT
 
@@ -17,6 +18,9 @@ class MshvSuite(Suite):
         backend.add_argument("--launcher", help="Privileged Hyper-V appliance launcher")
 
     def preflight(self, args):
+        if not args.control:
+            print("WARNING: no external recovery configured. The process timeout "
+                  "cannot recover a hung host.", file=sys.stderr)
         if not args.launcher:
             fd = os.open("/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
             os.close(fd)
@@ -35,4 +39,4 @@ class MshvSuite(Suite):
 def create_suite():
     return MshvSuite(name="MSHV", contract=COMMIT, binary=ROOT / "target/mshv/init",
                      initramfs=ROOT / "target/mshv/initramfs.cpio.gz",
-                     protocol_prefix="MSHV", requires_control=True)
+                     protocol_prefix="MSHV")
