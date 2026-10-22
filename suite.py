@@ -3,7 +3,6 @@
 
 import os
 from pathlib import Path
-import sys
 from lib.appliance import Suite
 from mshv.contract import COMMIT
 
@@ -18,15 +17,12 @@ class MshvSuite(Suite):
         backend.add_argument("--launcher", help="Privileged Hyper-V appliance launcher")
 
     def preflight(self, args):
-        if not args.control:
-            print("WARNING: no external recovery configured. The process timeout "
-                  "cannot recover a hung host.", file=sys.stderr)
         if not args.launcher:
             fd = os.open("/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
             os.close(fd)
 
     def build_command(self, args, selected, run_id):
-        cmdline = ("console=ttyS0,115200 rdinit=/init panic=-1 loglevel=3 "
+        cmdline = ("console=ttyS0,115200 rdinit=/init panic=-1 loglevel=3 vv.shutdown=host "
                    f"vv.run={run_id} vv.tests={','.join(selected)}")
         if args.launcher:
             return [args.launcher, "--kernel", str(args.kernel), "--initramfs",
@@ -39,4 +35,4 @@ class MshvSuite(Suite):
 def create_suite():
     return MshvSuite(name="MSHV", contract=COMMIT, binary=ROOT / "target/mshv/init",
                      initramfs=ROOT / "target/mshv/initramfs.cpio.gz",
-                     protocol_prefix="MSHV")
+                     protocol_prefix="MSHV", host_shutdown=True)

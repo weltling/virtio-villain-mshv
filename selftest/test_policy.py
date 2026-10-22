@@ -36,11 +36,13 @@ class PolicyTests(unittest.TestCase):
         opened.assert_called_once_with(
             "/dev/mshv", mshv_suite.os.O_RDWR | mshv_suite.os.O_CLOEXEC)
         closed.assert_called_once_with(42)
-        self.assertIn("cannot recover a hung host", errors.getvalue())
+        self.assertEqual(errors.getvalue(), "")
         command = suite.build_command(args, ["ML001"], "token")
         self.assertEqual(command[0], "/local/cloud-hypervisor")
         self.assertEqual(command[command.index("--cpus") + 1], "boot=2,nested=on")
         self.assertIn("vv.tests=ML001", command[command.index("--cmdline") + 1])
+        self.assertIn("vv.shutdown=host", command[command.index("--cmdline") + 1])
+        self.assertTrue(suite.host_shutdown)
 
     def test_external_control_remains_available(self):
         suite = mshv_suite.create_suite()
