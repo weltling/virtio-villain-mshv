@@ -4,9 +4,9 @@
 import os
 from pathlib import Path
 from lib.appliance import Suite, source_catalog
-from mshv.contract import COMMIT
+from .contract import COMMIT
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class MshvSuite(Suite):

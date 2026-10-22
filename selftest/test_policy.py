@@ -4,6 +4,7 @@
 
 import contextlib
 import io
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -14,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT.parent / "virtio-villain"))
 from lib import appliance  # noqa: E402
-import suite as mshv_suite  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class PolicyTests(unittest.TestCase):
                           side_effect=AssertionError("Listing must not execute a binary")), \
              contextlib.redirect_stdout(output):
             status = appliance.main([
-                "--suite", str(ROOT / "suite.py"),
+                "--suite", str(ROOT),
                 "--binary", "/nonexistent/mshv-init", "--list"])
         self.assertEqual(status, 0)
         entries = appliance.parse_catalog(output.getvalue())
@@ -33,7 +33,7 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(all(entries.values()))
 
     def test_nested_execution_without_external_control(self):
-        suite = mshv_suite.create_suite()
+        suite = appliance.load_suite(ROOT)
         with tempfile.TemporaryDirectory() as work:
             image = Path(work) / "image"
             image.write_bytes(b"image")
@@ -44,12 +44,12 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(suite.requires_control)
         self.assertIsNone(args.control)
         errors = io.StringIO()
-        with patch.object(mshv_suite.os, "open", return_value=42) as opened, \
-             patch.object(mshv_suite.os, "close") as closed, \
+        with patch.object(os, "open", return_value=42) as opened, \
+             patch.object(os, "close") as closed, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
         opened.assert_called_once_with(
-            "/dev/mshv", mshv_suite.os.O_RDWR | mshv_suite.os.O_CLOEXEC)
+            "/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
         closed.assert_called_once_with(42)
         self.assertEqual(errors.getvalue(), "")
         command = suite.build_command(args, ["ML001"], "token")
@@ -60,7 +60,7 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(suite.host_shutdown)
 
     def test_external_control_remains_available(self):
-        suite = mshv_suite.create_suite()
+        suite = appliance.load_suite(ROOT)
         with tempfile.TemporaryDirectory() as work:
             image = Path(work) / "image"
             image.write_bytes(b"image")
@@ -68,7 +68,7 @@ class PolicyTests(unittest.TestCase):
                 "--kernel", str(image), "--initramfs", str(image),
                 "--control", "/external/control", "--launcher", "/external/launcher"])
         errors = io.StringIO()
-        with patch.object(mshv_suite.os, "open") as opened, \
+        with patch.object(os, "open") as opened, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
         opened.assert_not_called()

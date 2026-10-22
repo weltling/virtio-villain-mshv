@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 
-from mshv.boot_image import ROOT, build_image
+ROOT = Path(__file__).resolve().parent
 
 
 def main():
@@ -23,11 +23,16 @@ def main():
         parser.error("Invalid run identifier")
     output = ROOT / "target/nested-hyperv/runs" / args.run_id
     try:
-        disk = build_image(output, args.kernel, args.initramfs, args.cmdline)
+        subprocess.run([
+            sys.executable, str(ROOT / "lib/boot_image.py"),
+            "--output", str(output), "--kernel", str(args.kernel),
+            "--initramfs", str(args.initramfs), "--cmdline", args.cmdline,
+        ], check=True)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(2, f"Image construction failed: {error}\n")
     vmm = os.environ.get("MSHV_VMM", str(ROOT.parent / (
         "cloud-hypervisor/target/release/cloud-hypervisor")))
+    disk = output / "boot.img"
     command = [vmm, "--firmware", str(output / "firmware.fd"),
                "--disk", f"path={disk},image_type=raw,readonly=on",
                "--cpus", "boot=2,nested=on", "--memory", "size=2G",

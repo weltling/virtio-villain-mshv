@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Private nested boot disk assembly checks."""
 
+import contextlib
+import importlib.util
+import io
 import json
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -12,11 +16,52 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from mshv import boot_image  # noqa: E402
+spec = importlib.util.spec_from_file_location("mshv_boot_image", ROOT / "lib/boot_image.py")
+boot_image = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(boot_image)
 
 
 class BootImageTests(unittest.TestCase):
+    def test_launcher_uses_the_private_builder_and_its_outputs(self):
+        launch = runpy.run_path(str(ROOT / "launch-nested"))["main"]
+        output = ROOT / "target/nested-hyperv/runs/launcher-test"
+        arguments = [
+            "launch-nested", "--kernel", "/kernel", "--initramfs", "/archive",
+            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test"]
+        with patch.object(sys, "argv", arguments), \
+             patch.dict(launch.__globals__["os"].environ, {"MSHV_VMM": "/vmm"}), \
+             patch.object(subprocess, "run") as build, \
+             patch.object(launch.__globals__["os"], "execv") as execute, \
+             contextlib.redirect_stdout(io.StringIO()):
+            launch()
+        build.assert_called_once_with([
+            sys.executable, str(ROOT / "lib/boot_image.py"),
+            "--output", str(output), "--kernel", "/kernel",
+            "--initramfs", "/archive", "--cmdline", "vv.run=launcher-test",
+        ], check=True)
+        command = execute.call_args.args[1]
+        self.assertEqual(execute.call_args.args[0], "/vmm")
+        self.assertEqual(command[command.index("--firmware") + 1],
+                         str(output / "firmware.fd"))
+        self.assertEqual(command[command.index("--disk") + 1],
+                         f"path={output / 'boot.img'},image_type=raw,readonly=on")
+
+    def test_launcher_does_not_start_a_vm_after_builder_failure(self):
+        launch = runpy.run_path(str(ROOT / "launch-nested"))["main"]
+        arguments = [
+            "launch-nested", "--kernel", "/kernel", "--initramfs", "/archive",
+            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test"]
+        errors = io.StringIO()
+        with patch.object(sys, "argv", arguments), \
+             patch.object(subprocess, "run",
+                          side_effect=subprocess.CalledProcessError(1, ["builder"])), \
+             patch.object(launch.__globals__["os"], "execv") as execute, \
+             contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as exit:
+            launch()
+        self.assertEqual(exit.exception.code, 2)
+        self.assertIn("Image construction failed", errors.getvalue())
+        execute.assert_not_called()
+
     def test_grub_chain_and_command_line(self):
         config = boot_image.grub_config("vv.run=token vv.tests=ML001 rdinit=/init")
         self.assertIn("chainloader /HvLoader.efi lxhvloader.dll", config)
