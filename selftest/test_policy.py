@@ -25,7 +25,8 @@ class PolicyTests(unittest.TestCase):
             image.write_bytes(b"image")
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
-                "--vmm", "/local/cloud-hypervisor", "ML001"])
+                "--vmm", "/local/cloud-hypervisor", "--jobs", "16", "ML001"])
+        self.assertEqual(args.jobs, 16)
         self.assertFalse(suite.requires_control)
         self.assertIsNone(args.control)
         errors = io.StringIO()
