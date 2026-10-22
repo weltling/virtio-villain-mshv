@@ -1,4 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * ML004 - Complete 128 lifecycles without observable resource exhaustion.
+ *
+ * UAPI: repeated partition creation, initialization and VP creation.
+ *
+ * Each cycle creates and initializes a partition and virtual processor (VP),
+ * repeats initialization, checks exact RAX set/get and closes all resources.
+ * Alternate normal cleanup with closing parent file descriptors (FDs) before
+ * using the VP. The console identifies every cycle.
+ *
+ * Every allocation and operation must succeed. Passing observes no exhaustion
+ * over these cycles, but cannot prove complete hypervisor resource cleanup.
+ */
 #include "mshv/test.h"
 
 static test_result_t repeated(struct mshv_fixture *f)

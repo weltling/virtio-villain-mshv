@@ -1,4 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Shared partition and virtual processor lifecycle checks.
+ * Create with zero flags/isolation, initialize, then create virtual processor
+ * (VP) zero. Each file descriptor (FD) must be valid and have FD_CLOEXEC.
+ * Fixture cleanup closes owned FDs after returned successes and failures.
+ * A closed FD is marked unowned to avoid closing it twice. Descriptor closure
+ * is not evidence of complete hypervisor resource reclamation.
+ */
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>

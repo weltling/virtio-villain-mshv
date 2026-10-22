@@ -1,4 +1,22 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * MR003 - Exact register errors followed by valid operations.
+ *
+ * UAPI: MSHV_GET_VP_REGISTERS and MSHV_SET_VP_REGISTERS validation errors.
+ *
+ * Create a partition and virtual processor (VP), then require:
+ *
+ * Operation  Invalid input                        Return  errno
+ * GET, SET   count 129, above the limit of 128      -1      EINVAL
+ * GET, SET   NULL top-level IOCTL argument         -1      EFAULT
+ * GET, SET   count one with NULL register array    -1      EFAULT
+ * SET        HV_REGISTER_EXPLICIT_SUSPEND          -1      EINVAL
+ * SET        HV_REGISTER_INTERCEPT_SUSPEND         -1      EINVAL
+ *
+ * Count 129 is rejected before any array copy, so one backing entry suffices.
+ * After each of the eight rejections, require a valid exact RAX roundtrip.
+ * This checks continued usability without assuming atomicity or rollback.
+ */
 #include <errno.h>
 #include "mshv/test.h"
 

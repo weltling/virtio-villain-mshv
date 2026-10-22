@@ -1,4 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * ML003 - Closing a virtual processor (VP) FD does not release its index.
+ *
+ * UAPI: MSHV_CREATE_VP index ownership after closing the VP descriptor.
+ *
+ * Create VP zero, then close its file descriptor (FD) while retaining the
+ * partition. Recreating index zero must return -1/EEXIST because the partition
+ * still owns that VP. Creating VP one must succeed. Its RAX set/get must
+ * preserve 0x1020304050607080, proving continued usability after rejection.
+ * Index reuse is not expected before partition destruction.
+ */
 #include <errno.h>
 #include "mshv/test.h"
 

@@ -1,4 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Shared general purpose register (GPR) checks.
+ * Use RAX, RCX, RDX, RBX with distinct seed-derived values. Poison receive
+ * slots before GET, then require exact lower 64-bit values and register names.
+ * The upper half of each 128-bit ABI value slot is not asserted for GPRs.
+ * Also require unchanged request count, padding and array pointer, plus zero
+ * must-be-zero (MBZ) association fields. Both IOCTLs must return zero.
+ * These checks exercise register access, not virtual processor execution.
+ */
 #include <inttypes.h>
 #include <string.h>
 
