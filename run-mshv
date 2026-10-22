@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Select the private suite through Virtio Villain's pluggable runner."""
+
+import os
+from pathlib import Path
+import sys
+
+root = Path(__file__).resolve().parent
+framework = Path(os.environ.get("VV_ROOT", root.parent / "virtio-villain")).resolve()
+os.execv(str(framework / "run"),
+         [str(framework / "run"), "--suite", str(root / "suite.py"), *sys.argv[1:]])
