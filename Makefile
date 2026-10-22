@@ -8,17 +8,23 @@ VV_ROOT ?= $(HOME)/virtio-villain
 TEST_SRCS = $(sort $(wildcard tests/*/*.c))
 SRCS = bin/mshv.c mshv/lifecycle.c mshv/registers.c $(TEST_SRCS)
 
-.DEFAULT_GOAL := mshv-initramfs
+.DEFAULT_GOAL := initramfs
 
 contract:
 	python3 mshv/contract.py --source "$(MSHV_SOURCE)" --output "$(TARGET)/mshv/contract.h"
 
-mshv mshv-initramfs: contract
-	$(MAKE) -C "$(VV_ROOT)" appliance-initramfs CC="$(CC)" \
+init: contract
+	$(MAKE) -C "$(VV_ROOT)" appliance CC="$(CC)" \
 	  APPLIANCE_SRCS="$(addprefix $(CURDIR)/,$(SRCS))" \
 	  APPLIANCE_TARGET="$(abspath $(TARGET))/mshv" \
 	  APPLIANCE_CPPFLAGS="-I$(CURDIR) -I$(abspath $(TARGET))/mshv" \
 	  CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)"
+
+initramfs: init
+	python3 "$(VV_ROOT)/lib/initramfs.py" --init "$(TARGET)/mshv/init" \
+	  --output "$(TARGET)/mshv/initramfs.cpio.gz"
+
+mshv mshv-initramfs: initramfs
 
 kernel:
 	"$(VV_ROOT)/build-kernel" --source "$(MSHV_SOURCE)" \
@@ -32,4 +38,4 @@ selftest:
 lint:
 	python3 -m flake8 run-mshv launch-nested suite.py mshv selftest
 
-.PHONY: contract mshv mshv-initramfs kernel selftest lint
+.PHONY: contract init initramfs mshv mshv-initramfs kernel selftest lint
