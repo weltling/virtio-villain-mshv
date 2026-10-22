@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-ESP = Path("/boot/efi")
+ESP = Path(os.environ.get("MSHV_ESP", "/boot/efi"))
 FIRMWARE = Path("/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd")
 
 
@@ -57,14 +57,6 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def copy_installed(source, destination):
-    if os.access(source, os.R_OK):
-        shutil.copyfile(source, destination)
-    else:
-        with destination.open("wb") as stream:
-            subprocess.run(["sudo", "-n", "cat", str(source)], stdout=stream, check=True)
-
-
 def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
     with kernel.open("rb") as stream:
         stream.seek(0x202)
@@ -104,7 +96,7 @@ def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
                         *(f"::/{name}" for name in directories)], check=True)
         for index, (name, source) in enumerate(sources.items()):
             staged = scratch / f"component-{index}"
-            copy_installed(source, staged)
+            shutil.copyfile(source, staged)
             manifest["files"][name] = {"source": str(source), "sha256": sha256(staged)}
             subprocess.run(["mcopy", "-i", str(partition), str(staged), f"::/{name}"],
                            check=True)

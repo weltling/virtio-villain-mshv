@@ -42,6 +42,21 @@ class BootImageTests(unittest.TestCase):
                 boot_image.build_image(output, kernel, root / "archive", "vv.run=token")
             self.assertFalse(output.exists())
 
+    def test_component_permission_error_is_not_elevated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            kernel, archive = root / "bzImage", root / "archive"
+            kernel.write_bytes(b"\0" * 0x202 + b"HdrS")
+            archive.write_bytes(b"archive")
+            with patch.object(boot_image, "ROOT", root), \
+                 patch.object(boot_image.shutil, "which", return_value="/tool"), \
+                 patch.object(boot_image.subprocess, "run") as run, \
+                 patch.object(boot_image.shutil, "copyfile",
+                              side_effect=PermissionError("Component is unreadable")), \
+                 self.assertRaisesRegex(PermissionError, "Component is unreadable"):
+                boot_image.build_image(root / "image", kernel, archive, "vv.run=token")
+            self.assertTrue(all(call.args[0][0] != "sudo" for call in run.call_args_list))
+
     @unittest.skipUnless(all(shutil.which(tool) for tool in (
         "sfdisk", "mkfs.vfat", "mmd", "mcopy", "mdir", "mtype")),
         "Disk image tools required")
