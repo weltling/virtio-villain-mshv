@@ -53,6 +53,7 @@ extern const struct vv_test_entry __start_mshv_registry[];
 extern const struct vv_test_entry __stop_mshv_registry[];
 
 test_result_t mshv_create(struct mshv_fixture *f);
+test_result_t mshv_check_fd(int fd, const char *operation);
 test_result_t mshv_close(int *fd, const char *operation);
 test_result_t mshv_cleanup(struct mshv_fixture *f);
 test_result_t mshv_roundtrip(struct mshv_fixture *f, unsigned count, uint64_t seed);

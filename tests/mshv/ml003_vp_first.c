@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#include <errno.h>
+#include "mshv/test.h"
+
+static test_result_t vp_first(struct mshv_fixture *f)
+{
+    struct mshv_create_vp vp = {.vp_index = 0};
+    if (mshv_create(f) != TEST_PASS)
+        return TEST_FAIL;
+    if (mshv_close(&f->vp, "close VP before partition") != TEST_PASS)
+        return TEST_FAIL;
+    if (mshv_expect_ioctl(f->partition, MSHV_CREATE_VP, &vp,
+                          "closed VP remains allocated until partition destruction",
+                          EEXIST) != TEST_PASS)
+        return TEST_FAIL;
+    vp.vp_index = 1;
+    f->vp = ioctl(f->partition, MSHV_CREATE_VP, &vp);
+    if (mshv_check_fd(f->vp, "MSHV_CREATE_VP index=1 after EEXIST") != TEST_PASS)
+        return TEST_FAIL;
+    return mshv_roundtrip(f, 1, 0x1020304050607080ULL);
+}
+
+REGISTER_MSHV_TEST(ML003, vp_first, "VP-first closure, exact EEXIST, then usable new VP");
