@@ -114,11 +114,16 @@ for rebuilding VMMs but are not needed to compile the C test executable.
 
 ```sh
 cd ~/virtio-villain-mshv
-make mshv-initramfs
+make -j init initramfs
 make kernel RUSTC=false
 make selftest lint
 ./run-mshv --list
 ```
+
+`init` builds the test executable. `initramfs` builds and packages it.
+Requesting both with `-j` builds the executable once before packaging.
+The default target is `initramfs`. The existing `mshv` and `mshv-initramfs`
+names remain aliases for the complete archive build.
 
 `VV_ROOT`/`MSHV_SOURCE` Make variables select alternate framework/source trees.
 The wrapper also accepts `VV_ROOT` as an environment variable. All suite and
