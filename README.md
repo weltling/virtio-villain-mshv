@@ -262,17 +262,18 @@ cleanup but do not establish kernel conformance or appliance boot success.
 
 ## Coverage and results
 
-Test cases live in `tests/mshv`, with one registered case per source file.
+Each source file contains its test ID, short description and expected
+results. The ID consists of a category prefix and a three digit number.
+Tests use one registration per source file.
 
-| ID | Coverage |
-| --- | --- |
-| ML001 | Create/init/init/VP, descriptor checks, valid register access |
-| ML002 | Close both parents, then successfully use VP registers |
-| ML003 | Close VP first, exact `EEXIST`, then create/use another VP |
-| ML004 | 128 cycles alternating normal closure and closing parents first |
-| MR001 | Individual RAX values including zero, all ones and high bits |
-| MR002 | Distinct batches of four registers and replacement values |
-| MR003 | Exact `EINVAL`/`EFAULT`, each followed by successful valid operations |
+| Prefix | Category | Sources |
+| --- | --- | --- |
+| ML | MSHV lifecycle | [tests/ml](tests/ml) |
+| MR | MSHV register access | [tests/mr](tests/mr) |
+
+Use `./run-mshv --list` to list IDs and descriptions directly from the
+source registrations, even before building the executable. Execution uses
+the compiled catalog, so rebuild after adding or changing tests.
 
 Exit status 0 means executed tests passed, 1 means assertions/cleanup failed,
 and 2 means infrastructure failed. Missing privileges, permissions, device,
