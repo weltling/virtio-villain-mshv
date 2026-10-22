@@ -18,13 +18,14 @@ from mshv import contract  # noqa: E402
 
 class ContractTests(unittest.TestCase):
     def test_one_case_per_source(self):
-        sources = sorted((ROOT / "tests/mshv").glob("*.c"))
+        sources = sorted((ROOT / "tests").glob("*/*.c"))
         self.assertEqual(len(sources), 7)
         for source in sources:
             with self.subTest(source=source.name):
                 text = source.read_text()
                 self.assertEqual(text.count("REGISTER_MSHV_TEST("), 1)
                 self.assertIn(f"REGISTER_MSHV_TEST({source.stem.split('_')[0].upper()},", text)
+                self.assertEqual(source.parent.name, source.stem[:2])
 
     def test_reject_unreviewed_or_dirty_source(self):
         for responses in (["wrong"], [contract.COMMIT, " M drivers/hv/mshv_root_main.c"]):
@@ -58,7 +59,7 @@ class FixtureTests(unittest.TestCase):
             command = ["cc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
                        "-I", str(FRAMEWORK), "-I", str(root), str(ROOT / "selftest/test_mshv.c"),
                        str(ROOT / "mshv/lifecycle.c"), str(ROOT / "mshv/registers.c"),
-                       *(str(source) for source in sorted((ROOT / "tests/mshv").glob("*.c"))),
+                       *(str(source) for source in sorted((ROOT / "tests").glob("*/*.c"))),
                        "-Wl,--wrap=open,--wrap=close,--wrap=fcntl,--wrap=ioctl",
                        "-o", str(binary)]
             subprocess.run(command, check=True, capture_output=True)

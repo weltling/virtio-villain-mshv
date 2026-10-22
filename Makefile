@@ -5,7 +5,7 @@ LDFLAGS ?= -static
 TARGET ?= target
 MSHV_SOURCE ?= $(HOME)/linux
 VV_ROOT ?= $(HOME)/virtio-villain
-TEST_SRCS = $(sort $(wildcard tests/mshv/*.c))
+TEST_SRCS = $(sort $(wildcard tests/*/*.c))
 SRCS = bin/mshv.c mshv/lifecycle.c mshv/registers.c $(TEST_SRCS)
 
 .DEFAULT_GOAL := mshv-initramfs
