@@ -167,14 +167,14 @@ shim, GRUB, Hyper-V and then the selected kernel with the test initramfs.
 The GRUB entry follows the installed host sequence without copying its
 root device identifiers or enabling AMD confidential guest options.
 
-Run a selected case through the same shared framework:
+Run the suite through the same shared framework:
 
 ```sh
 ~/virtio-villain/run \
   --suite ~/virtio-villain-mshv/suite.py \
   --launcher ~/virtio-villain-mshv/launch-nested \
   --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/bzImage-x86_64 \
-  --timeout 120 ML001
+  --timeout 120 --jobs 16
 ```
 
 `launch-nested` assembles a new disk for each test run. It uses the neighboring
@@ -250,6 +250,8 @@ parent partition environment. It receives `--kernel`, `--initramfs`,
 `--initramfs PATH` selects an explicit separate MSHV archive. Omitting test IDs
 runs all tests. `--output PATH` selects a new diagnostics directory.
 Each test gets a fresh VM boot with its own console log and timeout.
+`--jobs N` limits concurrent VMs, with one as the default. For example,
+`--jobs 16` runs the seven selected cases concurrently without sharing VMs.
 `--repeat 3` runs three complete sequences of those separate boots.
 A guest crash or assertion failure is recorded before proceeding to the next
 test. Failed external recovery or launcher termination stops further boots.
