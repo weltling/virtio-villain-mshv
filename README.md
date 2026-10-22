@@ -151,7 +151,7 @@ second Hyper-V instance before Linux, construct a separate UEFI boot disk
 from the installed components:
 
 ```sh
-python3 mshv/boot_image.py --output target/nested-hyperv/appliance
+python3 lib/boot_image.py --output target/nested-hyperv/appliance
 ```
 
 The builder reads the host ESP and copies the installed shim, GRUB and
@@ -176,7 +176,7 @@ Run the suite through the same shared framework:
 
 ```sh
 ~/virtio-villain/run \
-  --suite ~/virtio-villain-mshv/suite.py \
+  --suite ~/virtio-villain-mshv \
   --launcher ~/virtio-villain-mshv/launch-nested \
   --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 120 --jobs 16
@@ -221,7 +221,7 @@ sudo setcap cap_net_admin=ep \
   ~/cloud-hypervisor/target/release/cloud-hypervisor
 
 ~/virtio-villain/run \
-  --suite ~/virtio-villain-mshv/suite.py \
+  --suite ~/virtio-villain-mshv \
   --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
   --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/vmlinux-x86_64 \
   --timeout 180 --repeat 3 ML001 MR001 MR003
@@ -232,6 +232,10 @@ script that only kills the launcher or reports success without arming recovery.
 
 The `run-mshv` wrapper invokes this same framework runner with `--suite`
 already selected. It is shorthand, not a separate orchestration engine.
+The framework loads `lib/suite.py` from this directory. Private helpers live
+under `lib`, including the C interface in `lib/mshv.h`. Python policy helpers
+use relative imports in an isolated package, not the framework's `lib`
+package.
 For example, from this directory:
 
 ```sh
