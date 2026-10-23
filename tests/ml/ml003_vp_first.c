@@ -26,7 +26,7 @@ static test_result_t vp_first(struct mshv_fixture *f)
         return TEST_FAIL;
     vp.vp_index = 1;
     f->vp = ioctl(f->partition, MSHV_CREATE_VP, &vp);
-    if (mshv_check_fd(f->vp, "MSHV_CREATE_VP index=1 after EEXIST") != TEST_PASS)
+    if (mshv_check_fd(f->vp, "MSHV_CREATE_VP index=%u after EEXIST", vp.vp_index) != TEST_PASS)
         return TEST_FAIL;
     return mshv_roundtrip(f, 1, 0x1020304050607080ULL);
 }
