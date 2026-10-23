@@ -16,8 +16,9 @@
 
 static test_result_t repeated(struct mshv_fixture *f)
 {
-    for (unsigned i = 0; i < 128; ++i) {
-        printf("mshv-cycle %u/128\n", i + 1);
+    const unsigned cycles = 128;
+    for (unsigned i = 0; i < cycles; ++i) {
+        printf("mshv-cycle %u/%u\n", i + 1, cycles);
         if (mshv_create(f) != TEST_PASS)
             return TEST_FAIL;
         if (i % 2 && mshv_close(&f->device, "close device before partition") != TEST_PASS)
