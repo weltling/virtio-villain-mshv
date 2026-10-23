@@ -57,7 +57,7 @@ class PolicyTests(unittest.TestCase):
                         "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}", "init",
                     ], check=True, capture_output=True, text=True, timeout=20)
                     expected = [root / name for name in (
-                        "bin/mshv.c", "lib/lifecycle.c", "lib/registers.c")]
+                        "bin/mshv.c", "lib/appliance.c", "lib/lifecycle.c", "lib/registers.c")]
                     expected.extend(sorted(paths[name] for name in names))
                     self.assertEqual(record.read_text().split(), list(map(str, expected)))
                     with patch.dict(suite.list_tests.__globals__, {"ROOT": root}):

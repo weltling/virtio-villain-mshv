@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,7 +11,34 @@
 
 static int types[4096], indices[4096], next_fd = 20, open_fds;
 static int vp_created[2], references, calls, fail_at, corrupt_read, close_failure;
+static int fd_flags = FD_CLOEXEC;
 static uint64_t values[2][4];
+static unsigned cpuid_ecx = HYPERV_HYPERVISOR_PRESENT_BIT;
+static unsigned cpuid_max = HYPERV_CPUID_FEATURES;
+static unsigned cpuid_interface = VV_HYPERV_INTERFACE_HV1_SIGNATURE;
+static unsigned cpuid_privileges = HV_CREATE_PARTITIONS;
+
+void mshv_test_cpuid(unsigned leaf, unsigned *eax, unsigned *ebx,
+                     unsigned *ecx, unsigned *edx)
+{
+    *eax = *ebx = *ecx = *edx = 0;
+    switch (leaf) {
+    case VV_X86_CPUID_FEATURES:
+        *ecx = cpuid_ecx;
+        break;
+    case HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS:
+        *eax = cpuid_max;
+        break;
+    case HYPERV_CPUID_INTERFACE:
+        *eax = cpuid_interface;
+        break;
+    case HYPERV_CPUID_FEATURES:
+        *ebx = cpuid_privileges;
+        break;
+    default:
+        assert(0);
+    }
+}
 
 static int allocate(int type, int index)
 {
@@ -32,7 +60,9 @@ int __wrap_open(const char *path, int flags, ...)
 int __wrap_fcntl(int fd, int command, ...)
 {
     assert(types[fd] && command == F_GETFD);
-    return FD_CLOEXEC;
+    if (fd_flags < 0)
+        errno = EBADF;
+    return fd_flags;
 }
 
 int __wrap_close(int fd)
@@ -69,7 +99,8 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
         return reject(EIO);
     if (types[fd] == 1 && request == MSHV_CREATE_PARTITION) {
         struct mshv_create_partition *args = arg;
-        assert(args && args->pt_flags == 0 && args->pt_isolation == 0);
+        assert(args && args->pt_flags == VV_MSHV_PARTITION_FLAGS_NONE &&
+               args->pt_isolation == MSHV_PT_ISOLATION_NONE);
         assert(references == 0);
         ++references;
         return allocate(2, 0);
@@ -111,16 +142,76 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
 
 static test_result_t execute(const struct vv_test_entry *test)
 {
-    struct mshv_fixture f = {.device = -1, .partition = -1, .vp = -1};
+    struct mshv_fixture f;
+    mshv_init_context(&f);
     test_result_t result = test->fn(&f);
-    if (mshv_cleanup(&f) != TEST_PASS)
+    if (mshv_cleanup_context(&f) != TEST_PASS)
         result = TEST_FAIL;
     assert(open_fds == 0 && references == 0);
     return result;
 }
 
+static void check_preflight(void)
+{
+    int previous_calls = calls;
+    cpuid_ecx = 0;
+    assert(mshv_preflight() == -1);
+    cpuid_ecx = HYPERV_HYPERVISOR_PRESENT_BIT;
+    cpuid_max = HYPERV_CPUID_INTERFACE;
+    assert(mshv_preflight() == -1);
+    cpuid_max = HYPERV_CPUID_FEATURES;
+    cpuid_interface = 0;
+    assert(mshv_preflight() == -1);
+    cpuid_interface = VV_HYPERV_INTERFACE_HV1_SIGNATURE;
+    cpuid_privileges = 0;
+    assert(mshv_preflight() == -1);
+    cpuid_privileges = HV_CREATE_PARTITIONS | HV_ISOLATION;
+    assert(mshv_preflight() == -1);
+    assert(calls == previous_calls && open_fds == 0 && references == 0);
+    cpuid_privileges = HV_CREATE_PARTITIONS;
+    assert(mshv_preflight() == 0);
+    assert(open_fds == 0 && references == 0);
+    for (int step = 1; step <= 3; ++step) {
+        calls = 0;
+        fail_at = step;
+        assert(mshv_preflight() == -1);
+        assert(open_fds == 0 && references == 0);
+    }
+    fail_at = 0;
+    close_failure = 1;
+    assert(mshv_preflight() == -1);
+    assert(open_fds == 0 && references == 0);
+    assert(mshv_preflight() == 0);
+    assert(open_fds == 0 && references == 0);
+}
+
 int main(void)
 {
+    uint32_t signature = VV_HYPERV_INTERFACE_HV1_SIGNATURE;
+    assert(!memcmp(&signature, "Hv#1", sizeof(signature)));
+    assert(HYPERV_HYPERVISOR_PRESENT_BIT == UINT32_C(0x80000000));
+    assert(HV_CREATE_PARTITIONS == UINT32_C(0x00000001));
+    assert(HV_ISOLATION == UINT32_C(0x00400000));
+    struct mshv_create_partition partition = {
+        .pt_flags = 0xabc,
+        .pt_isolation = UINT64_C(0x123456789abcdef0),
+    };
+    struct mshv_create_vp vp = {.vp_index = 7};
+    errno = EACCES;
+    assert(mshv_check_fd(-1,
+                        "MSHV_CREATE_PARTITION flags=0x%" PRIx64 " isolation=0x%" PRIx64,
+                        (uint64_t)partition.pt_flags,
+                        (uint64_t)partition.pt_isolation) == TEST_FAIL);
+    int fd = allocate(1, 0);
+    fd_flags = 0;
+    assert(mshv_check_fd(fd, "MSHV_CREATE_VP index=%u", vp.vp_index) == TEST_FAIL);
+    fd_flags = -1;
+    assert(mshv_check_fd(fd, "MSHV_CREATE_VP index=%u", vp.vp_index) == TEST_FAIL);
+    fd_flags = FD_CLOEXEC;
+    assert(mshv_check_fd(fd, "MSHV_CREATE_VP index=%u", vp.vp_index) == TEST_PASS);
+    assert(__wrap_close(fd) == 0);
+    check_preflight();
+
     const struct vv_test_entry *lifecycle = NULL, *single = NULL, *negative = NULL;
     unsigned count = 0;
     for (const struct vv_test_entry *test = __start_mshv_registry;
@@ -146,7 +237,17 @@ int main(void)
     corrupt_read = 0;
     close_failure = 1;
     assert(execute(lifecycle) == TEST_FAIL);
+    const int negative_failures[] = {4, 10, 13, 19};
+    for (unsigned i = 0; i < sizeof(negative_failures) / sizeof(negative_failures[0]); ++i) {
+        calls = 0;
+        fail_at = negative_failures[i];
+        assert(execute(negative) == TEST_FAIL);
+    }
+    fail_at = 0;
     assert(execute(negative) == TEST_PASS);
+    struct mshv_fixture f = {.device = -1, .partition = -1, .vp = -1};
+    assert(mshv_roundtrip(&f, 0, 0) == TEST_FAIL);
+    assert(mshv_roundtrip(&f, 5, 0) == TEST_FAIL);
     puts("mshv mock checks passed");
     return 0;
 }

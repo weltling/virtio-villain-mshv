@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Private contract and IOCTL-fixture checks; generic runner tests live upstream."""
 
+import errno
 import importlib.util
 from pathlib import Path
 import shutil
@@ -18,6 +19,35 @@ spec.loader.exec_module(contract)
 
 
 class ContractTests(unittest.TestCase):
+    def test_extract_partition_flag_and_isolation_enumerations(self):
+        enums = (
+            "enum { MSHV_PT_BIT_LAPIC, MSHV_PT_BIT_NESTED_VIRTUALIZATION, "
+            "MSHV_PT_BIT_COUNT };",
+            "enum { MSHV_PT_ISOLATION_NONE, MSHV_PT_ISOLATION_SNP, "
+            "MSHV_PT_ISOLATION_COUNT };")
+        with tempfile.TemporaryDirectory() as work:
+            source = Path(work)
+            header = source / "include/uapi/linux/mshv.h"
+            header.parent.mkdir(parents=True)
+            declarations = [
+                *(f"struct {name} {{ __u64 value; }};" for name in contract.STRUCTS),
+                *(f"#define {name} 0" for name in contract.DEFINES)]
+            for missing in (None, *range(len(enums))):
+                with self.subTest(missing=missing):
+                    header.write_text("\n".join([
+                        *declarations,
+                        *(enum for index, enum in enumerate(enums) if index != missing)]))
+                    with patch.object(contract.subprocess, "check_output",
+                                      side_effect=[contract.COMMIT, ""]):
+                        if missing is None:
+                            extracted = contract.extract(source)
+                            for enum in enums:
+                                self.assertIn(enum, extracted)
+                        else:
+                            with self.assertRaisesRegex(
+                                    RuntimeError, "Missing UAPI enumeration"):
+                                contract.extract(source)
+
     def test_one_case_per_source(self):
         sources = sorted((ROOT / "tests").glob("*/*.c"))
         self.assertEqual(len(sources), 7)
@@ -43,29 +73,69 @@ class FixtureTests(unittest.TestCase):
             root = Path(work)
             header = [
                 f'#define VV_MSHV_CONTRACT "{contract.COMMIT}"',
+                "enum { MSHV_PT_ISOLATION_NONE, MSHV_PT_ISOLATION_SNP, "
+                "MSHV_PT_ISOLATION_COUNT };",
                 "struct mshv_create_partition { __u64 pt_flags; __u64 pt_isolation; };",
                 "struct mshv_create_vp { __u32 vp_index; };",
                 "struct mshv_vp_registers { __u32 count; __u32 padding; "
                 "struct hv_register_assoc *regs; };",
                 "#define MSHV_IOCTL 0xb8",
-                "#define MSHV_VP_MAX_REGISTERS 128",
                 "#define MSHV_CREATE_PARTITION _IOW(MSHV_IOCTL, 0, struct mshv_create_partition)",
                 "#define MSHV_INITIALIZE_PARTITION _IO(MSHV_IOCTL, 0)",
                 "#define MSHV_CREATE_VP _IOW(MSHV_IOCTL, 1, struct mshv_create_vp)",
                 "#define MSHV_GET_VP_REGISTERS _IOWR(MSHV_IOCTL, 0xf0, struct mshv_vp_registers)",
                 "#define MSHV_SET_VP_REGISTERS _IOW(MSHV_IOCTL, 0xf1, struct mshv_vp_registers)",
             ]
-            (root / "contract.h").write_text("\n".join(header) + "\n")
             binary = root / "test-mshv"
+            (root / "cpuid.h").write_text(
+                "void mshv_test_cpuid(unsigned, unsigned *, unsigned *, unsigned *, unsigned *);\n"
+                "#define __cpuid(leaf, a, b, c, d) "
+                "mshv_test_cpuid((leaf), &(a), &(b), &(c), &(d))\n")
             command = ["cc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT),
                        "-I", str(FRAMEWORK), "-I", str(root), str(ROOT / "selftest/test_mshv.c"),
+                       str(ROOT / "lib/appliance.c"),
                        str(ROOT / "lib/lifecycle.c"), str(ROOT / "lib/registers.c"),
                        *(str(source) for source in sorted((ROOT / "tests").glob("*/*.c"))),
                        "-Wl,--wrap=open,--wrap=close,--wrap=fcntl,--wrap=ioctl",
                        "-o", str(binary)]
-            subprocess.run(command, check=True, capture_output=True)
-            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
-            self.assertIn("mshv mock checks passed", result.stdout)
+            for limit in (128, 64):
+                with self.subTest(limit=limit):
+                    (root / "contract.h").write_text(
+                        "\n".join([*header, f"#define MSHV_VP_MAX_REGISTERS {limit}"]) + "\n")
+                    subprocess.run(command, check=True, capture_output=True)
+                    result = subprocess.run(
+                        [str(binary)], check=True, capture_output=True, text=True)
+                    self.assertIn(
+                        "MSHV_CREATE_PARTITION flags=0xabc isolation=0x123456789abcdef0: "
+                        f"expected resource fd >= 0, actual -1 errno={errno.EACCES}",
+                        result.stdout)
+                    self.assertIn(
+                        "MSHV_CREATE_VP index=7: fd=20 expected F_GETFD with FD_CLOEXEC, "
+                        "actual 0 errno=0", result.stdout)
+                    self.assertIn(
+                        "MSHV_CREATE_VP index=7: fd=20 expected F_GETFD with FD_CLOEXEC, "
+                        f"actual -1 errno={errno.EBADF}", result.stdout)
+                    self.assertIn("MSHV_CREATE_PARTITION flags=0x0 isolation=0x0:", result.stdout)
+                    self.assertIn("MSHV_CREATE_VP index=0:", result.stdout)
+                    for request in ("GET", "SET"):
+                        self.assertIn(f"{request} count={limit + 1}:", result.stdout)
+                        self.assertIn(
+                            f"{request} count=1 NULL register array:", result.stdout)
+                    for count in (0, 5):
+                        self.assertIn(
+                            f"internal roundtrip count: expected 1..4, actual {count}",
+                            result.stdout)
+                    for cycle in (1, 128):
+                        self.assertIn(f"mshv-cycle {cycle}/128\n", result.stdout)
+                    for diagnostic in (
+                            "no hypervisor CPUID bit", "Hyper-V feature leaf unavailable",
+                            "expected Hv#1 CPUID interface signature",
+                            "requires CreatePartitions (HV_CREATE_PARTITIONS) "
+                            "without HV_ISOLATION"):
+                        self.assertIn(diagnostic, result.stdout)
+                    self.assertEqual(
+                        result.stdout.count("prerequisite lifecycle failed"), 4)
+                    self.assertIn("mshv mock checks passed", result.stdout)
 
 
 if __name__ == "__main__":
