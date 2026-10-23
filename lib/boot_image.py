@@ -3,18 +3,198 @@
 """Assemble a private UEFI disk from installed Hyper-V boot components."""
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
 import shlex
 import shutil
+import stat
+import struct
 import subprocess
+import sys
 import tempfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 ESP = Path(os.environ.get("MSHV_ESP", "/boot/efi"))
 FIRMWARE = Path("/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd")
+FIRMWARE_REPOSITORY = "cloud-hypervisor/edk2"
+FIRMWARE_ASSET = "CLOUDHV.fd"
+IMAGE_TOOLS = ("sfdisk", "mkfs.vfat", "mmd", "mcopy", "mdir")
+ESP_COMPONENTS = {
+    "EFI/BOOT/BOOTX64.EFI": "EFI/BOOT/bootx64.efi",
+    "EFI/BOOT/grubx64.efi": "EFI/BOOT/grubx64.efi",
+    "EFI/BOOT/mmx64.efi": "EFI/BOOT/mmx64.efi",
+    "HvLoader.efi": "HvLoader.efi",
+    "lxhvloader.dll": "lxhvloader.dll",
+    "Windows/System32/hvix64.exe": "Windows/System32/hvix64.exe",
+    "Windows/System32/hvax64.exe": "Windows/System32/hvax64.exe",
+    "Windows/System32/kdstub.dll": "Windows/System32/kdstub.dll",
+}
+
+PE_DOS_HEADER_SIZE = 64
+PE_DOS_LFANEW_OFFSET = 60
+PE_SIGNATURE = b"PE\0\0"
+PE_COFF_HEADER = struct.Struct("<HHIIIHH")
+PE_MACHINE_AMD64 = 0x8664
+PE_CHARACTERISTIC_EXECUTABLE_IMAGE = 0x0002
+PE32_PLUS_MAGIC = 0x020B
+PE32_PLUS_MIN_HEADER_SIZE = 112
+PE_SECTION_HEADER = struct.Struct("<8sIIIIIIHHI")
+
+ELF64_LE_IDENT = b"\x7fELF\x02\x01"
+ELF64_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
+ELF64_PROGRAM_HEADER = struct.Struct("<IIQQQQQQ")
+ELF_MACHINE_I386 = 3
+ELF_MACHINE_X86_64 = 62
+ELF_ET_EXEC = 2
+ELF_ET_DYN = 3
+ELF_PT_LOAD = 1
+
+UEFI_FV_SIGNATURE = b"_FVH"
+UEFI_FV_SIGNATURE_OFFSET = 40
+UEFI_FV_HEADER = struct.Struct("<16s16sQIIHHHBB")
+UEFI_FV_REVISION = 2
+LINUX_BOOT_FLAG_OFFSET = 0x1FE
+LINUX_BOOT_FLAG = b"\x55\xaa"
+LINUX_SETUP_SIGNATURE_OFFSET = 0x202
+LINUX_SETUP_SIGNATURE = b"HdrS"
+NEWC_HEADER_SIZE = 110
+VALIDATION_CHUNK_SIZE = 64 * 1024
+
+
+def _read_at(stream, offset, size, description):
+    stream.seek(offset)
+    data = stream.read(size)
+    if len(data) != size:
+        raise ValueError(f"Truncated {description}: expected {size} bytes, got {len(data)}")
+    return data
+
+
+def _validate_pe(stream, size):
+    dos = _read_at(stream, 0, PE_DOS_HEADER_SIZE, "PE DOS header")
+    if dos[:2] != b"MZ":
+        raise ValueError(f"Expected MZ DOS signature, got {dos[:2]!r}")
+    pe_offset = struct.unpack_from("<I", dos, PE_DOS_LFANEW_OFFSET)[0]
+    if pe_offset < PE_DOS_HEADER_SIZE:
+        raise ValueError(f"Invalid PE header offset {pe_offset}")
+    signature = _read_at(stream, pe_offset, len(PE_SIGNATURE), "PE signature")
+    if signature != PE_SIGNATURE:
+        raise ValueError(f"Expected PE/COFF signature {PE_SIGNATURE!r}, got {signature!r}")
+    coff = _read_at(stream, pe_offset + len(PE_SIGNATURE), PE_COFF_HEADER.size, "COFF header")
+    machine, sections, _, _, _, optional_size, characteristics = PE_COFF_HEADER.unpack(coff)
+    if machine != PE_MACHINE_AMD64:
+        raise ValueError(f"Expected AMD64 PE machine 0x{PE_MACHINE_AMD64:x}, got 0x{machine:x}")
+    if not characteristics & PE_CHARACTERISTIC_EXECUTABLE_IMAGE:
+        raise ValueError("PE/COFF image lacks IMAGE_FILE_EXECUTABLE_IMAGE")
+    if optional_size < PE32_PLUS_MIN_HEADER_SIZE:
+        raise ValueError(f"Truncated PE32+ optional header size {optional_size}")
+    optional_offset = pe_offset + len(PE_SIGNATURE) + PE_COFF_HEADER.size
+    optional = _read_at(stream, optional_offset, optional_size, "PE32+ optional header")
+    magic = struct.unpack_from("<H", optional)[0]
+    if magic != PE32_PLUS_MAGIC:
+        raise ValueError(f"Expected PE32+ magic 0x{PE32_PLUS_MAGIC:x}, got 0x{magic:x}")
+    section_offset = optional_offset + optional_size
+    if not sections or section_offset + sections * PE_SECTION_HEADER.size > size:
+        raise ValueError("Missing or truncated PE section table")
+    for index in range(sections):
+        section = PE_SECTION_HEADER.unpack(_read_at(
+            stream, section_offset + index * PE_SECTION_HEADER.size,
+            PE_SECTION_HEADER.size, "PE section header"))
+        raw_size, raw_offset = section[3:5]
+        if raw_size and raw_offset + raw_size > size:
+            raise ValueError(f"Truncated PE section {index}: data extends beyond the file")
+
+
+def _validate_firmware(stream, size):
+    if _read_at(stream, 0, min(4, size), "firmware signature") == b"\x7fELF":
+        header = ELF64_HEADER.unpack(_read_at(stream, 0, ELF64_HEADER.size, "ELF64 header"))
+        ident, file_type, machine, _, _, phoff, _, _, ehsize, phsize, phcount, _, _, _ = header
+        # The installed ELF64 firmware uses an EM_386 entry before entering long mode.
+        if (not ident.startswith(ELF64_LE_IDENT)
+                or machine not in (ELF_MACHINE_I386, ELF_MACHINE_X86_64)):
+            raise ValueError("Expected little endian ELF64 firmware for x86")
+        if file_type not in (ELF_ET_EXEC, ELF_ET_DYN) or ehsize != ELF64_HEADER.size:
+            raise ValueError("Invalid executable ELF firmware header")
+        if (not phcount or phsize != ELF64_PROGRAM_HEADER.size
+                or phoff + phsize * phcount > size):
+            raise ValueError("Missing or truncated ELF firmware program headers")
+        loadable = False
+        for index in range(phcount):
+            segment = ELF64_PROGRAM_HEADER.unpack(_read_at(
+                stream, phoff + index * phsize, phsize, "ELF program header"))
+            kind, _, offset, _, _, file_size, memory_size, _ = segment
+            if kind == ELF_PT_LOAD:
+                if file_size > memory_size or offset + file_size > size:
+                    raise ValueError(f"Invalid ELF load segment {index}")
+                loadable |= file_size > 0
+        if not loadable:
+            raise ValueError("ELF firmware has no loadable data")
+    for offset in range(0, size, VALIDATION_CHUNK_SIZE):
+        block = _read_at(stream, offset, min(
+            VALIDATION_CHUNK_SIZE + len(UEFI_FV_SIGNATURE) - 1, size - offset), "firmware data")
+        start = 0
+        while (position := block.find(UEFI_FV_SIGNATURE, start)) >= 0:
+            start = position + len(UEFI_FV_SIGNATURE)
+            base = offset + position - UEFI_FV_SIGNATURE_OFFSET
+            if base < 0 or base + UEFI_FV_HEADER.size > size:
+                continue
+            header = UEFI_FV_HEADER.unpack(_read_at(
+                stream, base, UEFI_FV_HEADER.size, "UEFI firmware volume header"))
+            _, _, length, _, _, header_length, _, _, _, revision = header
+            if (revision != UEFI_FV_REVISION or header_length < UEFI_FV_HEADER.size
+                    or header_length % 2 or header_length > length or base + length > size):
+                continue
+            data = _read_at(stream, base, header_length, "UEFI firmware volume checksum")
+            if sum(struct.unpack(f"<{header_length // 2}H", data)) & 0xFFFF == 0:
+                return
+    raise ValueError("No UEFI firmware volume with a valid signature, length and header checksum")
+
+
+def _validate_kernel(stream, size):
+    boot_flag = _read_at(stream, LINUX_BOOT_FLAG_OFFSET, len(LINUX_BOOT_FLAG), "bzImage boot flag")
+    setup = _read_at(stream, LINUX_SETUP_SIGNATURE_OFFSET,
+                     len(LINUX_SETUP_SIGNATURE), "bzImage setup signature")
+    if boot_flag != LINUX_BOOT_FLAG or setup != LINUX_SETUP_SIGNATURE:
+        raise ValueError("Expected x86 bzImage boot flag and HdrS signature, not vmlinux ELF")
+
+
+def _validate_initramfs(stream, size):
+    with gzip.GzipFile(fileobj=stream) as archive:
+        header = archive.read(NEWC_HEADER_SIZE)
+        if (len(header) != NEWC_HEADER_SIZE or header[:6] not in (b"070701", b"070702")
+                or any(byte not in b"0123456789abcdefABCDEF" for byte in header[6:])):
+            raise ValueError("Expected a gzip compressed newc initramfs header")
+        # Reading to EOF makes gzip verify the trailer and CRC.
+        while archive.read(VALIDATION_CHUNK_SIZE):
+            pass
+
+
+def validate_boot_inputs(kernel, initramfs, esp=ESP, firmware=FIRMWARE):
+    checks = [
+        ("bzImage kernel", kernel, _validate_kernel),
+        ("gzip/newc initramfs", initramfs, _validate_initramfs),
+        ("UEFI firmware", firmware, _validate_firmware),
+        *(("x86-64 PE/COFF boot component", esp / name, _validate_pe)
+          for name in ESP_COMPONENTS.values()),
+    ]
+    errors = []
+    for kind, path, validate in checks:
+        try:
+            info = path.stat()
+            if not stat.S_ISREG(info.st_mode) or not info.st_size:
+                raise ValueError("Expected a nonempty regular file")
+            with path.open("rb") as stream:
+                validate(stream, info.st_size)
+        except (OSError, ValueError, EOFError, struct.error, zlib.error) as error:
+            errors.append(f"{kind} {path}: {error}")
+    for tool in IMAGE_TOOLS:
+        if not shutil.which(tool):
+            errors.append(f"Missing image construction tool: {tool}")
+    if errors:
+        raise RuntimeError("Boot input preflight failed:\n  " + "\n  ".join(errors))
 
 
 def grub_config(cmdline):
@@ -57,30 +237,29 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def resolve_firmware(firmware=None, *, offline=False):
+    if firmware is not None:
+        return firmware.resolve()
+    try:
+        FIRMWARE.lstat()
+    except FileNotFoundError:
+        from villain.artifacts import github_release_asset
+
+        cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        return github_release_asset(
+            FIRMWARE_REPOSITORY, FIRMWARE_ASSET,
+            cache / "virtio-villain/firmware", offline=offline).resolve()
+    return FIRMWARE
+
+
 def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
-    with kernel.open("rb") as stream:
-        stream.seek(0x202)
-        if stream.read(4) != b"HdrS":
-            raise ValueError("GRUB requires the x86 bzImage kernel, not vmlinux ELF")
-    if initramfs.stat().st_size == 0:
-        raise ValueError("Test initramfs is empty")
+    validate_boot_inputs(kernel, initramfs, esp, firmware)
     config = grub_config(cmdline)
-    tools = ("sfdisk", "mkfs.vfat", "mmd", "mcopy", "mdir")
-    for tool in tools:
-        if not shutil.which(tool):
-            raise RuntimeError(f"Missing image construction tool: {tool}")
     output.mkdir(parents=True, exist_ok=False)
     workspace = ROOT / "target/image-work"
     workspace.mkdir(parents=True, exist_ok=True)
     sources = {
-        "EFI/BOOT/BOOTX64.EFI": esp / "EFI/BOOT/bootx64.efi",
-        "EFI/BOOT/grubx64.efi": esp / "EFI/BOOT/grubx64.efi",
-        "EFI/BOOT/mmx64.efi": esp / "EFI/BOOT/mmx64.efi",
-        "HvLoader.efi": esp / "HvLoader.efi",
-        "lxhvloader.dll": esp / "lxhvloader.dll",
-        "Windows/System32/hvix64.exe": esp / "Windows/System32/hvix64.exe",
-        "Windows/System32/hvax64.exe": esp / "Windows/System32/hvax64.exe",
-        "Windows/System32/kdstub.dll": esp / "Windows/System32/kdstub.dll",
+        **{name: esp / source for name, source in ESP_COMPONENTS.items()},
         "boot/vmlinuz": kernel,
         "boot/initramfs.cpio.gz": initramfs,
     }
@@ -124,6 +303,8 @@ def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
 
 
 def main():
+    framework = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain"))
+    sys.path.insert(0, str(framework / "lib/python"))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True,
                         help="New output directory containing boot.img and firmware.fd")
@@ -134,13 +315,17 @@ def main():
         "console=ttyS0,115200 rdinit=/init panic=-1 loglevel=7 "
         "no5lvl intel_iommu=off amd_iommu=off vv.run=image-probe vv.tests=ML001"))
     parser.add_argument("--esp", type=Path, default=ESP)
-    parser.add_argument("--firmware", type=Path, default=FIRMWARE)
+    parser.add_argument("--firmware", type=Path,
+                        help=f"Local firmware override (otherwise prefer {FIRMWARE})")
+    parser.add_argument("--offline", action="store_true",
+                        help="Use installed or cached firmware without network access")
     args = parser.parse_args()
     try:
+        firmware = resolve_firmware(args.firmware, offline=args.offline)
         disk = build_image(args.output.resolve(), args.kernel.resolve(),
                            args.initramfs.resolve(), args.cmdline,
-                           args.esp.resolve(), args.firmware.resolve())
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+                           args.esp.resolve(), firmware)
+    except (OSError, RuntimeError, ValueError, ImportError, subprocess.SubprocessError) as error:
         parser.exit(2, f"Image construction failed: {error}\n")
     print(f"Guest boot disk: {disk}")
     print(f"Firmware: {disk.parent / 'firmware.fd'}")
