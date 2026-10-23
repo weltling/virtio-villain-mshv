@@ -70,7 +70,8 @@ class PolicyTests(unittest.TestCase):
             appliance.main(["--suite", str(ROOT), "--help"])
         self.assertEqual(exit.exception.code, 0)
         text = " ".join(output.getvalue().split())
-        for expected in ("MSHV_VMM", "make help", "--kernel"):
+        for expected in ("MSHV_VMM", "MSHV_ESP", "CLOUDHV_EFI.fd", "make help",
+                         "--kernel", "--firmware", "--offline", "SHA256"):
             self.assertIn(expected, text)
 
     def test_default_kernel_matches_the_suite_build_output(self):
@@ -107,20 +108,26 @@ class PolicyTests(unittest.TestCase):
 
     def test_nested_execution_without_external_control(self):
         suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
         with tempfile.TemporaryDirectory() as work:
             image = Path(work) / "image"
             image.write_bytes(b"image")
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
-                "--vmm", "/local/cloud-hypervisor", "--jobs", "16", "ML001"])
+                "--vmm", "/local/cloud-hypervisor", "--firmware", str(image),
+                "--jobs", "16", "ML001"])
         self.assertEqual(args.jobs, 16)
         self.assertFalse(suite.requires_control)
         self.assertIsNone(args.control)
         errors = io.StringIO()
-        with patch.object(os, "open", return_value=42) as opened, \
+        with patch.object(module, "validate_boot_inputs") as validate, \
+             patch.object(module, "executable", return_value=args.vmm) as executable, \
+             patch.object(os, "open", return_value=42) as opened, \
              patch.object(os, "close") as closed, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
+        validate.assert_called_once_with(args.kernel, args.initramfs, firmware=image)
+        executable.assert_called_once_with(args.vmm)
         opened.assert_called_once_with(
             "/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
         closed.assert_called_once_with(42)
@@ -131,27 +138,73 @@ class PolicyTests(unittest.TestCase):
             str(ROOT / "lib/suite.py")])
         self.assertEqual(command[command.index("--vmm") + 1], "/local/cloud-hypervisor")
         self.assertEqual(command[command.index("--run-id") + 1], "token")
+        self.assertEqual(command[command.index("--firmware") + 1], str(image))
         self.assertIn("vv.tests=ML001", command[command.index("--cmdline") + 1])
         self.assertIn("vv.shutdown=host", command[command.index("--cmdline") + 1])
         self.assertTrue(suite.host_shutdown)
 
     def test_external_control_uses_the_same_nested_environment(self):
         suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
         with tempfile.TemporaryDirectory() as work:
             image = Path(work) / "image"
             image.write_bytes(b"image")
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
-                "--control", "/external/control"])
+                "--control", "/external/control", "--firmware", str(image)])
         errors = io.StringIO()
-        with patch.object(os, "open", return_value=42) as opened, \
+        with patch.object(module, "validate_boot_inputs") as validate, \
+             patch.object(module, "executable", return_value=args.vmm) as executable, \
+             patch.object(os, "open", return_value=42) as opened, \
              patch.object(os, "close") as closed, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
+        validate.assert_called_once_with(args.kernel, args.initramfs, firmware=image)
+        executable.assert_called_once_with(args.vmm)
         opened.assert_called_once_with("/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
         closed.assert_called_once_with(42)
         self.assertEqual(args.control, "/external/control")
         self.assertEqual(errors.getvalue(), "")
+
+    def test_dependency_preflight_stops_parallel_execution_before_device_access(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as work:
+            image = Path(work) / "image"
+            image.write_bytes(b"image")
+            with patch.object(appliance, "load_suite", return_value=suite), \
+                 patch.object(appliance, "catalog", return_value={"ML001": "Fixture"}), \
+                 patch.object(module, "validate_boot_inputs",
+                              side_effect=RuntimeError("Bad HvLoader.efi signature")) as validate, \
+                 patch.object(os, "open") as opened, \
+                 patch.object(appliance, "launch") as launch, \
+                 contextlib.redirect_stderr(errors):
+                status = appliance.main([
+                    "--suite", str(ROOT), "--kernel", str(image), "--initramfs", str(image),
+                    "--jobs", "16", "--firmware", str(image)])
+            validate.assert_called_once_with(image, image, firmware=image)
+            opened.assert_not_called()
+            launch.assert_not_called()
+        self.assertEqual(status, 2)
+        self.assertEqual(errors.getvalue().count("[INFRA]"), 1)
+        self.assertIn("Bad HvLoader.efi signature", errors.getvalue())
+
+    def test_missing_vmm_stops_before_device_access(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        with tempfile.TemporaryDirectory() as work:
+            image = Path(work) / "image"
+            image.write_bytes(b"image")
+            args = appliance.parse_args(suite, [
+                "--kernel", str(image), "--initramfs", str(image),
+                "--vmm", str(Path(work) / "missing-vmm"), "--firmware", str(image)])
+            with patch.object(module, "validate_boot_inputs") as validate, \
+                 patch.object(os, "open") as opened, \
+                 self.assertRaisesRegex(RuntimeError, "Executable not found"):
+                suite.preflight(args)
+            validate.assert_called_once_with(image, image, firmware=image)
+            opened.assert_not_called()
 
     def test_default_nested_boot_needs_no_launcher_selection(self):
         suite = appliance.load_suite(ROOT)
@@ -171,3 +224,72 @@ class PolicyTests(unittest.TestCase):
         with patch.dict(os.environ, {"MSHV_VMM": "/environment/vmm"}):
             args = appliance.parse_args(suite, ["--list", "--vmm", "cloud-hypervisor"])
         self.assertEqual(args.vmm, "cloud-hypervisor")
+
+    def test_firmware_is_resolved_once_and_passed_to_workers(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        firmware = Path("/cache/verified/firmware.fd")
+        args = appliance.parse_args(suite, ["--list", "--offline"])
+        with patch.object(module, "resolve_firmware", return_value=firmware) as resolve, \
+             patch.object(module, "validate_boot_inputs") as validate, \
+             patch.object(module, "executable"), patch.object(os, "open", return_value=42), \
+             patch.object(os, "close"):
+            suite.preflight(args)
+            for token in ("first", "second"):
+                command = suite.build_command(args, ["ML001"], token)
+                self.assertEqual(command[command.index("--firmware") + 1], str(firmware))
+        resolve.assert_called_once_with(None, offline=True)
+        validate.assert_called_once_with(args.kernel, args.initramfs, firmware=firmware)
+
+    def test_worker_builds_with_selected_firmware_without_resolving_again(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        with patch.object(module, "resolve_firmware",
+                          side_effect=AssertionError("Worker must not resolve firmware")), \
+             patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+             patch.object(os, "execvp") as execute, contextlib.redirect_stdout(io.StringIO()):
+            suite.execute([
+                "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/initramfs",
+                "--firmware", "/selected/firmware", "--cmdline", "vv.tests=ML001",
+                "--run-id", "fixture"])
+        build.assert_called_once_with(
+            ROOT / "target/nested-hyperv/runs/fixture", Path("/kernel"), Path("/initramfs"),
+            "vv.tests=ML001", firmware=Path("/selected/firmware"))
+        execute.assert_called_once()
+        self.assertEqual(execute.call_args.args[1][2], str(
+            ROOT / "target/nested-hyperv/runs/fixture/firmware.fd"))
+
+    def test_firmware_resolution_failure_is_one_infrastructure_error(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as work:
+            image = Path(work) / "image"
+            image.write_bytes(b"image")
+            with patch.object(appliance, "load_suite", return_value=suite), \
+                 patch.object(appliance, "catalog", return_value={"ML001": "Fixture"}), \
+                 patch.object(module, "resolve_firmware",
+                              side_effect=RuntimeError("No published SHA256")), \
+                 patch.object(module, "validate_boot_inputs") as validate, \
+                 patch.object(os, "open") as opened, \
+                 patch.object(appliance, "launch") as launch, \
+                 contextlib.redirect_stderr(errors):
+                status = appliance.main([
+                    "--suite", str(ROOT), "--kernel", str(image), "--initramfs", str(image),
+                    "--jobs", "16"])
+            validate.assert_not_called()
+            opened.assert_not_called()
+            launch.assert_not_called()
+        self.assertEqual(status, 2)
+        self.assertEqual(errors.getvalue().count("[INFRA]"), 1)
+        self.assertIn("No published SHA256", errors.getvalue())
+
+    def test_listing_does_not_resolve_or_download_firmware(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        with patch.object(appliance, "load_suite", return_value=suite), \
+             patch.object(module, "resolve_firmware") as resolve, \
+             contextlib.redirect_stdout(io.StringIO()):
+            status = appliance.main(["--suite", str(ROOT), "--list", "--offline"])
+        self.assertEqual(status, 0)
+        resolve.assert_not_called()
