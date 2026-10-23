@@ -136,6 +136,7 @@ class FirmwareTests(unittest.TestCase):
             firmware = Path(work) / "selected.fd"
             with patch.object(sys, "argv", [
                     "boot_image.py", "--output", str(output), "--offline",
+                    "--kernel", "/kernel", "--initramfs", "/archive",
                     "--firmware", str(firmware)]), \
                  patch.object(boot_image, "resolve_firmware", return_value=firmware) as resolve, \
                  patch.object(boot_image, "build_image",
@@ -144,6 +145,25 @@ class FirmwareTests(unittest.TestCase):
                 boot_image.main()
             resolve.assert_called_once_with(firmware, offline=True)
             self.assertEqual(build.call_args.args[-1], firmware)
+
+    def test_standalone_builder_uses_recorded_kernel_and_matching_archive(self):
+        with tempfile.TemporaryDirectory() as work:
+            target = Path(work) / "custom-output"
+            target.mkdir()
+            kernel = Path(work) / "elsewhere/custom-kernel"
+            (target / "kernel-result.json").write_text(json.dumps({
+                "image": str(kernel), "arch": "x86_64", "format": "bzImage"}))
+            output = Path(work) / "disk"
+            firmware = Path(work) / "firmware"
+            with patch.object(sys, "argv", [
+                    "boot_image.py", "--output", str(output),
+                    "--build-dir", str(target), "--firmware", str(firmware)]), \
+                 patch.object(boot_image, "build_image",
+                              return_value=output / "boot.img") as build, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                boot_image.main()
+            self.assertEqual(build.call_args.args[1], kernel)
+            self.assertEqual(build.call_args.args[2], target / "mshv/initramfs.cpio.gz")
 
 
 class BootImageTests(unittest.TestCase):
