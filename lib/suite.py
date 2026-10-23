@@ -3,7 +3,7 @@
 
 import os
 from pathlib import Path
-from lib.appliance import Suite, source_catalog
+from villain.appliance import Suite, source_catalog
 from .contract import COMMIT
 
 ROOT = Path(__file__).resolve().parents[1]
