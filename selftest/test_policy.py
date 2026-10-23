@@ -119,8 +119,10 @@ class PolicyTests(unittest.TestCase):
                 "--binary", "/nonexistent/mshv-init", "--list"])
         self.assertEqual(status, 0)
         entries = appliance.parse_catalog(output.getvalue())
+        sources = sorted(ROOT.glob("tests/*/*.c"))
+        self.assertTrue(sources)
         self.assertEqual(list(entries), [
-            "ML001", "ML002", "ML003", "ML004", "MR001", "MR002", "MR003"])
+            source.stem.split("_", 1)[0].upper() for source in sources])
         self.assertTrue(all(entries.values()))
         self.assertTrue(all(not description[0].islower() for description in entries.values()))
 

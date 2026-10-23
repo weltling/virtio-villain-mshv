@@ -97,7 +97,6 @@ class BuildTests(unittest.TestCase):
             root = Path(temporary)
             shutil.copyfile(ROOT / "Makefile", root / "Makefile")
             (root / "lib").mkdir()
-            (root / "lib/contract.py").write_text("pass\n")
             (root / "lib/sources.py").write_text(
                 "raise SystemExit('fixture source selection failure')\n")
             framework = root / "framework"
@@ -136,15 +135,9 @@ class BuildTests(unittest.TestCase):
                 "struct.pack_into('<HH', elf, 54, 56, 0)\n"
                 "(output / 'init').write_bytes(elf)\n")
             (root / "lib").mkdir()
-            (root / "lib/contract.py").write_text(
-                "from pathlib import Path\n"
-                "import sys\n"
-                "output = Path(sys.argv[sys.argv.index('--output') + 1])\n"
-                "output.parent.mkdir(parents=True, exist_ok=True)\n"
-                "output.write_text('/* fixture contract */\\n')\n")
             source = root / "source tree"
             source.mkdir()
-            config = source / "Microsoft/configs/x86/mshv_defconfig"
+            config = source / "configs/test.config"
             config.parent.mkdir(parents=True)
             config.write_text("CONFIG_RUSTC_VERSION=0\nCONFIG_RUSTC_LLVM_VERSION=0\n")
             (source / "configure.py").write_text(
@@ -189,12 +182,12 @@ class BuildTests(unittest.TestCase):
             base.write_text(config.read_text() + "CONFIG_FIXTURE=m\n")
             fragment.write_text("CONFIG_FIXTURE=y\n")
             rust.write_text("CONFIG_RUSTC_VERSION=1\nCONFIG_RUSTC_LLVM_VERSION=1\n")
-            default = root / "target/kernel-microsoft"
+            default = root / "target/kernel"
             custom = root / "custom-kernel"
             rust_output = root / "rust-kernel"
             cases = (
-                ([], [config], "false", default),
-                (["RUSTC=false"], [config], "false", default),
+                ([f'KERNEL_CONFIGS="{config}"'], [config], "false", default),
+                ([f'KERNEL_CONFIGS="{config}"', "RUSTC=false"], [config], "false", default),
                 ([f"KERNEL_CONFIGS={base} {fragment}",
                   f"KERNEL_ARGS=--output {custom} --jobs 2"], [base, fragment], "false", custom),
                 ([f"KERNEL_CONFIGS={rust}", "RUSTC=rustc",
@@ -235,14 +228,29 @@ class BuildTests(unittest.TestCase):
                         text = (output / "images/config-x86_64").read_text()
                         self.assertIn("CONFIG_FIXTURE=y", text)
                         self.assertNotIn("CONFIG_FIXTURE=m", text)
-            record.unlink()
-            subprocess.run([
-                "make", "--no-print-directory", "-C", str(root),
-                "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}",
-                f"MSHV_SOURCE={source}", "kernel", "KERNEL_CONFIGS=",
-            ], check=True, capture_output=True, text=True, timeout=20)
-            arguments = json.loads(record.read_text())["argv"]
-            self.assertEqual(arguments[arguments.index("--config") + 1], str(config))
+
+    def test_kernel_source_and_configs_must_be_explicit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            framework = root / "framework"
+            framework.mkdir()
+            install_build_fixture(root, framework)
+            environment = dict(os.environ)
+            environment.pop("MSHV_SOURCE", None)
+            environment.pop("KERNEL_CONFIGS", None)
+            for overrides, expected in (
+                    ([], "Set MSHV_SOURCE"),
+                    (["MSHV_SOURCE=   "], "Set MSHV_SOURCE"),
+                    ([f"MSHV_SOURCE={root / 'source'}"], "Set KERNEL_CONFIGS")):
+                with self.subTest(overrides=overrides):
+                    result = subprocess.run([
+                        "make", "--no-print-directory", "-C", str(root),
+                        "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}",
+                        "kernel", *overrides,
+                    ], env=environment, capture_output=True, text=True, timeout=20)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected, result.stderr)
+            self.assertFalse((root / "target/kernel").exists())
 
     def test_help_exposes_build_configuration(self):
         result = subprocess.run([
@@ -266,8 +274,8 @@ class BuildTests(unittest.TestCase):
                 output = root / target
                 for name in (
                         "mshv/init", "mshv/initramfs.cpio.gz", "mshv/obj/test.o",
-                        "mshv/contract.h", "mshv/results/results.json",
-                        "kernel-microsoft/images/kernel", "kernel-cache/source",
+                        "mshv/stale.h", "mshv/results/results.json",
+                        "kernel/images/kernel", "kernel-cache/source",
                         "nested-hyperv/runs/test/boot.img", "boot-components/esp/shim"):
                     path = output / name
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -314,14 +322,6 @@ class BuildTests(unittest.TestCase):
                 (root / "lib").mkdir()
                 (framework / "lib/python/villain").mkdir(parents=True)
                 events = root / "events"
-                (root / "lib/contract.py").write_text(
-                    "from pathlib import Path\n"
-                    "import sys\n"
-                    f"with Path({str(events)!r}).open('a') as stream:\n"
-                    "    stream.write('contract\\n')\n"
-                    "output = Path(sys.argv[sys.argv.index('--output') + 1])\n"
-                    "output.parent.mkdir(parents=True, exist_ok=True)\n"
-                    "output.write_text('/* fixture contract */\\n')\n")
                 (framework / "Makefile").write_text(
                     ".PHONY: appliance\nappliance:\n"
                     '\tpython3 "$(CURDIR)/build.py" "$(APPLIANCE_TARGET)"\n')
@@ -347,11 +347,13 @@ class BuildTests(unittest.TestCase):
                 install_build_fixture(root, framework)
                 subprocess.run([
                     "make", "--no-print-directory", "-j8", "-C", str(root),
-                    "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}", *goals,
+                    "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}",
+                    f"MSHV_SOURCE={root / 'nonexistent kernel source'}", *goals,
                 ], check=True, capture_output=True, text=True, timeout=20)
                 archive = root / "target/mshv/initramfs.cpio.gz"
                 self.assertTrue((root / "target/mshv/init").is_file())
-                expected = ["contract", "link"]
+                self.assertFalse((root / "target/mshv/contract.h").exists())
+                expected = ["link"]
                 if goals != ["init"]:
                     expected.append("pack")
                     self.assertIn(b"init\0", gzip.decompress(archive.read_bytes()))
