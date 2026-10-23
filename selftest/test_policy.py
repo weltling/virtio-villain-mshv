@@ -4,6 +4,7 @@
 
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -16,21 +17,34 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent / "virtio-villain/lib/python"))
 from villain import appliance  # noqa: E402
+from test_build import install_build_fixture  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
+    def test_suite_identity_is_independent_of_kernel_source(self):
+        with patch.dict(os.environ, {"MSHV_SOURCE": "/nonexistent/kernel/source"}):
+            suite = appliance.load_suite(ROOT)
+        self.assertEqual(suite.contract, "mshv-uapi-v1")
+        self.assertIn(f'#define VV_MSHV_SUITE_ID "{suite.contract}"',
+                      (ROOT / "lib/ioctls.h").read_text())
+        self.assertIsNone(suite.build_spec.prepare)
+
     @unittest.skipUnless(shutil.which("make"), "Make required for source selection checks")
     def test_build_and_listing_select_the_same_tests(self):
         suite = appliance.load_suite(ROOT)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "lib").mkdir()
-            (root / "lib/contract.py").write_text("pass\n")
             framework = root / "framework"
             framework.mkdir()
             record = root / "sources"
             (framework / "Makefile").write_text(
                 f"appliance:\n\t@printf '%s\\n' \"$(APPLIANCE_SRCS)\" > '{record}'\n")
+            install_build_fixture(root, framework)
+            (framework / "Makefile").write_text(
+                f"appliance:\n\t@printf '%s\\n' \"$(APPLIANCE_SRCS)\" > '{record}'\n"
+                '\t@mkdir -p "$(APPLIANCE_TARGET)"\n'
+                '\t@printf "fixture" > "$(APPLIANCE_TARGET)/init"\n')
             paths = {
                 "ML010": root / "tests/ml/first.c",
                 "ML030": root / "tests/ml/added.c",
@@ -76,18 +90,22 @@ class PolicyTests(unittest.TestCase):
 
     def test_default_kernel_matches_the_suite_build_output(self):
         suite = appliance.load_suite(ROOT)
-        expected = ROOT / "target/kernel-microsoft/images/bzImage-x86_64"
-        self.assertEqual(suite.kernel, expected)
-        self.assertIn(f"make -C {ROOT} kernel,", suite.kernel_build_hint)
-        self.assertEqual(appliance.parse_args(suite, ["--list"]).kernel, expected)
+        self.assertIsNone(suite.kernel)
+        self.assertIn(f"make -C {ROOT} kernel ", suite.kernel_build_hint)
+        self.assertIn("MSHV_SOURCE=PATH KERNEL_CONFIGS=PATH", suite.kernel_build_hint)
+        self.assertIsNone(appliance.parse_args(suite, ["--list"]).kernel)
         with tempfile.TemporaryDirectory() as work:
             kernel = Path(work) / "built-kernel"
             archive = Path(work) / "archive"
             kernel.write_bytes(b"kernel")
             archive.write_bytes(b"archive")
-            suite.kernel = kernel
-            suite.initramfs = archive
-            args = appliance.parse_args(suite, ["ML001"])
+            target = Path(work) / "selected-output"
+            target.mkdir()
+            (target / "kernel-result.json").write_text(json.dumps({
+                "image": str(kernel), "arch": "x86_64", "format": "bzImage"}))
+            args = appliance.parse_args(suite, [
+                "--build-dir", str(target), "--initramfs", str(archive), "ML001"])
+            self.assertEqual(args.kernel, kernel)
             command = suite.build_command(args, ["ML001"], "token")
             self.assertEqual(command[command.index("--kernel") + 1], str(kernel))
 
@@ -214,8 +232,7 @@ class PolicyTests(unittest.TestCase):
                 if override:
                     os.environ["MSHV_VMM"] = override
                 args = appliance.parse_args(suite, ["--list"])
-                expected = override or str(
-                    ROOT.parent / "cloud-hypervisor/target/release/cloud-hypervisor")
+                expected = override or "cloud-hypervisor"
                 self.assertEqual(args.vmm, expected)
                 self.assertFalse(hasattr(args, "launcher"))
 

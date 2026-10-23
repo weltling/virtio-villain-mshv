@@ -3,6 +3,7 @@
 """Verify build target ordering and parallel goal deduplication."""
 
 import gzip
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,34 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK = ROOT.parent / "virtio-villain"
+
+
+def install_build_fixture(root, framework):
+    library = framework / "lib/python/villain"
+    library.mkdir(parents=True, exist_ok=True)
+    for source in (FRAMEWORK / "lib/python/villain").glob("*.py"):
+        destination = library / source.name
+        if not destination.exists():
+            shutil.copyfile(source, destination)
+    shutil.copyfile(FRAMEWORK / "lib/suite.mk", framework / "lib/suite.mk")
+    (root / "lib").mkdir(exist_ok=True)
+    for name in ("build.py", "sources.py"):
+        destination = root / "lib" / name
+        if not destination.exists():
+            shutil.copyfile(ROOT / "lib" / name, destination)
+    (root / "lib/suite.py").write_text(
+        "from pathlib import Path\n"
+        "from villain.appliance import Suite\n"
+        "from .build import create_build\n"
+        "def create_suite():\n"
+        "    build = create_build(Path(__file__).resolve().parents[1])\n"
+        "    context = build.context()\n"
+        "    return Suite('fixture', 'fixture-v1', context.binary, context.initramfs,\n"
+        "                 build_spec=build)\n")
+    for name in ("bin/mshv.c", "lib/appliance.c", "lib/lifecycle.c", "lib/registers.c"):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("/* fixture source */\n")
 
 
 @unittest.skipUnless(shutil.which("make"), "Make required for build checks")
@@ -76,6 +105,7 @@ class BuildTests(unittest.TestCase):
             marker = root / "unexpected-build"
             (framework / "Makefile").write_text(
                 f"appliance:\n\t@touch '{marker}'\n")
+            install_build_fixture(root, framework)
             result = subprocess.run([
                 "make", "--no-print-directory", "-C", str(root),
                 f"VV_ROOT={framework}", "init",
@@ -142,6 +172,7 @@ class BuildTests(unittest.TestCase):
                 '\tmkdir -p "$(O)/arch/x86/boot"\n'
                 '\tprintf "fixture image" > "$(O)/arch/x86/boot/bzImage"\n')
             record = root / "kernel-command.json"
+            install_build_fixture(root, framework)
             builder = framework / "build-kernel"
             builder.write_text(
                 "#!/usr/bin/env python3\n"
@@ -168,12 +199,15 @@ class BuildTests(unittest.TestCase):
                   f"KERNEL_ARGS=--output {custom} --jobs 2"], [base, fragment], "false", custom),
                 ([f"KERNEL_CONFIGS={rust}", "RUSTC=rustc",
                   f"KERNEL_ARGS=--output {rust_output} --jobs 2"], [rust], "rustc", rust_output))
-            for overrides, configs, compiler, output in cases:
+            for public, case in product((False, True), cases):
+                overrides, configs, compiler, output = case
                 goals = ["init", "initramfs", "kernel", *overrides]
-                with self.subTest(goals=goals):
+                with self.subTest(goals=goals, public=public):
                     subprocess.run([
-                        "make", "--no-print-directory", "-j8", "-C", str(root),
-                        "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}",
+                        "make", "--no-print-directory", "-j8", "-C",
+                        str(framework if public else root), "-f",
+                        str((FRAMEWORK if public else ROOT) / "Makefile"),
+                        f"SUITE={root}" if public else f"VV_ROOT={framework}",
                         f"MSHV_SOURCE={source}", *goals,
                     ], env=dict(os.environ, RUSTC="rustc"),
                         check=True, capture_output=True, text=True, timeout=20)
@@ -187,6 +221,10 @@ class BuildTests(unittest.TestCase):
                     self.assertTrue((root / "target/mshv/initramfs.cpio.gz").is_file())
                     self.assertTrue(
                         (output / "images/bzImage-x86_64").is_file())
+                    selected = json.loads((root / "target/kernel-result.json").read_text())
+                    self.assertEqual(selected, {
+                        "image": str(output / "images/bzImage-x86_64"),
+                        "arch": "x86_64", "format": "bzImage"})
                     self.assertEqual(
                         (output / "x86_64/compiler-origin").read_text(),
                         "command line")
@@ -306,6 +344,7 @@ class BuildTests(unittest.TestCase):
                     f"with Path({str(events)!r}).open('a') as stream:\n"
                     "    stream.write('pack\\n')\n"
                     "main()\n")
+                install_build_fixture(root, framework)
                 subprocess.run([
                     "make", "--no-print-directory", "-j8", "-C", str(root),
                     "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}", *goals,
