@@ -3,16 +3,31 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
 
 #include "lib/mshv.h"
 
-static int types[4096], indices[4096], next_fd = 20, open_fds;
-static int vp_created[2], references, calls, fail_at, corrupt_read, close_failure;
+static int types[4096], indices[4096], owners[4096], next_fd = 20, open_fds;
+static int references, calls, fail_at, corrupt_read, close_failure;
+static int opens, fail_open_at, closes, fail_close_at, fd_checks, fail_fd_at;
+static int shared_registers, corrupt_release, release_corruptions;
+static int break_release, release_breaks;
+static struct rlimit mock_limit = {4096, 4096};
+static int get_limits, set_limits, fail_get_limit, fail_set_limit_at;
+static int partition_rejections, vp_rejections, damage_unwind, retain_failed_vp;
+static int unexpected_creation;
+static pthread_mutex_t mock_lock = PTHREAD_MUTEX_INITIALIZER;
 static int fd_flags = FD_CLOEXEC;
-static uint64_t values[2][4];
+static struct mock_partition {
+    int references;
+    int broken;
+    int vp_created[2];
+    uint64_t values[2][4];
+} partitions[2];
 static unsigned cpuid_ecx = HYPERV_HYPERVISOR_PRESENT_BIT;
 static unsigned cpuid_max = HYPERV_CPUID_FEATURES;
 static unsigned cpuid_interface = VV_HYPERV_INTERFACE_HV1_SIGNATURE;
@@ -40,41 +55,74 @@ void mshv_test_cpuid(unsigned leaf, unsigned *eax, unsigned *ebx,
     }
 }
 
-static int allocate(int type, int index)
+static int allocate(int type, int index, int owner)
 {
     assert(next_fd < 4096);
     int fd = next_fd++;
     types[fd] = type;
     indices[fd] = index;
+    owners[fd] = owner;
     ++open_fds;
     return fd;
 }
 
-int __wrap_open(const char *path, int flags, ...)
+static int mock_open(const char *path, int flags)
 {
     assert(!strcmp(path, "/dev/mshv"));
     assert(flags == (O_RDWR | O_CLOEXEC));
-    return allocate(1, 0);
+    if (++opens == fail_open_at) {
+        errno = EACCES;
+        return -1;
+    }
+    if (mock_limit.rlim_cur == 0) {
+        errno = EMFILE;
+        return -1;
+    }
+    return allocate(1, 0, -1);
 }
 
-int __wrap_fcntl(int fd, int command, ...)
+static int mock_fcntl(int fd, int command)
 {
     assert(types[fd] && command == F_GETFD);
+    if (++fd_checks == fail_fd_at) {
+        errno = EBADF;
+        return -1;
+    }
     if (fd_flags < 0)
         errno = EBADF;
     return fd_flags;
 }
 
-int __wrap_close(int fd)
+static int mock_close(int fd)
 {
     assert(types[fd]);
-    if (types[fd] != 1 && --references == 0) {
-        memset(vp_created, 0, sizeof(vp_created));
-        memset(values, 0, sizeof(values));
+    if (types[fd] != 1) {
+        struct mock_partition *partition = &partitions[owners[fd]];
+        assert(references > 0 && partition->references > 0);
+        --references;
+        if (--partition->references == 0) {
+            memset(partition, 0, sizeof(*partition));
+            for (unsigned i = 0; break_release &&
+                 i < sizeof(partitions) / sizeof(partitions[0]); ++i) {
+                if (partitions[i].references) {
+                    partitions[i].broken = 1;
+                    ++release_breaks;
+                }
+            }
+            if (corrupt_release) {
+                for (unsigned i = 0; i < sizeof(partitions) / sizeof(partitions[0]); ++i) {
+                    if (partitions[i].references) {
+                        partitions[i].values[0][0] ^= 1;
+                        ++release_corruptions;
+                    }
+                }
+            }
+        }
     }
     types[fd] = 0;
     --open_fds;
-    if (close_failure) {
+    ++closes;
+    if (close_failure || closes == fail_close_at) {
         close_failure = 0;
         errno = EINTR;
         return -1;
@@ -88,33 +136,52 @@ static int reject(int error)
     return -1;
 }
 
-int __wrap_ioctl(int fd, unsigned long request, ...)
+static int mock_ioctl(int fd, unsigned long request, void *arg)
 {
-    va_list ap;
-    va_start(ap, request);
-    void *arg = va_arg(ap, void *);
-    va_end(ap);
     assert(types[fd]);
     if (++calls == fail_at)
+        return reject(EIO);
+    if (types[fd] != 1 && partitions[owners[fd]].broken)
         return reject(EIO);
     if (types[fd] == 1 && request == MSHV_CREATE_PARTITION) {
         struct mshv_create_partition *args = arg;
         assert(args && args->pt_flags == VV_MSHV_PARTITION_FLAGS_NONE &&
                args->pt_isolation == MSHV_PT_ISOLATION_NONE);
-        assert(references == 0);
+        if (mock_limit.rlim_cur == 0 && unexpected_creation != 1) {
+            ++partition_rejections;
+            if (damage_unwind == 1)
+                partitions[0].values[0][0] ^= 1;
+            return reject(EMFILE);
+        }
+        unsigned owner = 0;
+        while (owner < sizeof(partitions) / sizeof(partitions[0]) &&
+               partitions[owner].references)
+            ++owner;
+        assert(owner < sizeof(partitions) / sizeof(partitions[0]));
+        partitions[owner].references = 1;
         ++references;
-        return allocate(2, 0);
+        return allocate(2, 0, owner);
     }
     if (types[fd] == 2 && request == MSHV_INITIALIZE_PARTITION)
         return 0;
     if (types[fd] == 2 && request == MSHV_CREATE_VP) {
         struct mshv_create_vp *args = arg;
+        struct mock_partition *partition = &partitions[owners[fd]];
         assert(args && args->vp_index < 2);
-        if (vp_created[args->vp_index])
+        if (partition->vp_created[args->vp_index])
             return reject(EEXIST);
-        vp_created[args->vp_index] = 1;
+        if (mock_limit.rlim_cur == 0 && unexpected_creation != 2) {
+            ++vp_rejections;
+            if (damage_unwind == 2)
+                partitions[0].values[0][0] ^= 1;
+            if (retain_failed_vp)
+                partition->vp_created[args->vp_index] = 1;
+            return reject(EMFILE);
+        }
+        partition->vp_created[args->vp_index] = 1;
+        ++partition->references;
         ++references;
-        return allocate(3, args->vp_index);
+        return allocate(3, args->vp_index, owners[fd]);
     }
     assert(types[fd] == 3);
     assert(request == MSHV_GET_VP_REGISTERS || request == MSHV_SET_VP_REGISTERS);
@@ -125,6 +192,7 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
         return reject(EINVAL);
     if (!args->regs)
         return reject(EFAULT);
+    struct mock_partition *partition = &partitions[shared_registers ? 0 : owners[fd]];
     for (unsigned i = 0; i < args->count; ++i) {
         struct hv_register_assoc *reg = &args->regs[i];
         if (request == MSHV_SET_VP_REGISTERS &&
@@ -133,21 +201,84 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
         assert(reg->name >= VV_RAX && reg->name <= VV_RBX);
         unsigned n = reg->name - VV_RAX;
         if (request == MSHV_SET_VP_REGISTERS)
-            values[indices[fd]][n] = reg->value.reg64;
+            partition->values[indices[fd]][n] = reg->value.reg64;
         else
-            reg->value.reg64 = values[indices[fd]][n] ^ corrupt_read;
+            reg->value.reg64 = partition->values[indices[fd]][n] ^ corrupt_read;
     }
+    return 0;
+}
+
+int __wrap_open(const char *path, int flags, ...)
+{
+    pthread_mutex_lock(&mock_lock);
+    int rc = mock_open(path, flags);
+    pthread_mutex_unlock(&mock_lock);
+    return rc;
+}
+
+int __wrap_fcntl(int fd, int command, ...)
+{
+    pthread_mutex_lock(&mock_lock);
+    int rc = mock_fcntl(fd, command);
+    pthread_mutex_unlock(&mock_lock);
+    return rc;
+}
+
+int __wrap_close(int fd)
+{
+    pthread_mutex_lock(&mock_lock);
+    int rc = mock_close(fd);
+    pthread_mutex_unlock(&mock_lock);
+    return rc;
+}
+
+int __wrap_ioctl(int fd, unsigned long request, ...)
+{
+    va_list ap;
+    va_start(ap, request);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+    pthread_mutex_lock(&mock_lock);
+    int rc = mock_ioctl(fd, request, arg);
+    pthread_mutex_unlock(&mock_lock);
+    return rc;
+}
+
+int __wrap_getrlimit(int resource, struct rlimit *limit)
+{
+    assert(resource == RLIMIT_NOFILE);
+    ++get_limits;
+    if (fail_get_limit)
+        return reject(EIO);
+    *limit = mock_limit;
+    return 0;
+}
+
+int __wrap_setrlimit(int resource, const struct rlimit *limit)
+{
+    assert(resource == RLIMIT_NOFILE);
+    assert((limit->rlim_cur == 0 || limit->rlim_cur == 4096) && limit->rlim_max == 4096);
+    if (++set_limits == fail_set_limit_at)
+        return reject(EIO);
+    mock_limit = *limit;
     return 0;
 }
 
 static test_result_t execute(const struct vv_test_entry *test)
 {
     struct mshv_fixture f;
+    assert(open_fds == 0 && references == 0);
+    next_fd = 20;
+    calls = opens = closes = fd_checks = 0;
+    get_limits = set_limits = partition_rejections = vp_rejections = 0;
     mshv_init_context(&f);
     test_result_t result = test->fn(&f);
     if (mshv_cleanup_context(&f) != TEST_PASS)
         result = TEST_FAIL;
     assert(open_fds == 0 && references == 0);
+    assert(mock_limit.rlim_cur == 4096 && mock_limit.rlim_max == 4096);
+    for (unsigned i = 0; i < sizeof(partitions) / sizeof(partitions[0]); ++i)
+        assert(partitions[i].references == 0);
     return result;
 }
 
@@ -202,7 +333,7 @@ int main(void)
                         "MSHV_CREATE_PARTITION flags=0x%" PRIx64 " isolation=0x%" PRIx64,
                         (uint64_t)partition.pt_flags,
                         (uint64_t)partition.pt_isolation) == TEST_FAIL);
-    int fd = allocate(1, 0);
+    int fd = allocate(1, 0, -1);
     fd_flags = 0;
     assert(mshv_check_fd(fd, "MSHV_CREATE_VP index=%u", vp.vp_index) == TEST_FAIL);
     fd_flags = -1;
@@ -213,7 +344,11 @@ int main(void)
     check_preflight();
 
     const struct vv_test_entry *lifecycle = NULL, *single = NULL, *negative = NULL;
-    unsigned count = 0;
+    const struct vv_test_entry *isolation = NULL, *concurrent = NULL, *unwind = NULL;
+    int isolation_calls = 0, isolation_opens = 0, isolation_closes = 0, isolation_fds = 0;
+    int concurrent_opens = 0, concurrent_closes = 0, concurrent_fds = 0;
+    int unwind_calls = 0, unwind_opens = 0, unwind_closes = 0, unwind_fds = 0;
+    int unwind_limits = 0;
     for (const struct vv_test_entry *test = __start_mshv_registry;
          test < __stop_mshv_registry; ++test) {
         assert(execute(test) == TEST_PASS);
@@ -223,9 +358,31 @@ int main(void)
             single = test;
         if (!strcmp(test->name, "MR003"))
             negative = test;
-        ++count;
+        if (!strcmp(test->name, "ML005")) {
+            isolation = test;
+            isolation_calls = calls;
+            isolation_opens = opens;
+            isolation_closes = closes;
+            isolation_fds = fd_checks;
+        }
+        if (!strcmp(test->name, "ML006")) {
+            concurrent = test;
+            concurrent_opens = opens;
+            concurrent_closes = closes;
+            concurrent_fds = fd_checks;
+        }
+        if (!strcmp(test->name, "ML007")) {
+            unwind = test;
+            unwind_calls = calls;
+            unwind_opens = opens;
+            unwind_closes = closes;
+            unwind_fds = fd_checks;
+            unwind_limits = set_limits;
+            assert(get_limits == 1 && set_limits == 2049);
+            assert(partition_rejections == 512 && vp_rejections == 512);
+        }
     }
-    assert(count == 7 && lifecycle && single && negative);
+    assert(lifecycle && single && negative && isolation && concurrent && unwind);
     for (int step = 1; step <= 6; ++step) {
         calls = 0;
         fail_at = step;
@@ -245,9 +402,120 @@ int main(void)
     }
     fail_at = 0;
     assert(execute(negative) == TEST_PASS);
+    for (int step = 1; step <= isolation_calls; ++step) {
+        fail_at = step;
+        assert(execute(isolation) == TEST_FAIL);
+    }
+    fail_at = 0;
+    for (int step = 1; step <= isolation_opens; ++step) {
+        fail_open_at = step;
+        assert(execute(isolation) == TEST_FAIL);
+    }
+    fail_open_at = 0;
+    for (int step = 1; step <= isolation_fds; ++step) {
+        fail_fd_at = step;
+        assert(execute(isolation) == TEST_FAIL);
+    }
+    fail_fd_at = 0;
+    for (int step = 1; step <= isolation_closes; ++step) {
+        fail_close_at = step;
+        assert(execute(isolation) == TEST_FAIL);
+    }
+    fail_close_at = 0;
+    shared_registers = 1;
+    assert(execute(isolation) == TEST_FAIL);
+    shared_registers = 0;
+    corrupt_release = 1;
+    assert(execute(isolation) == TEST_FAIL);
+    assert(release_corruptions == 1);
+    corrupt_release = 0;
+    assert(execute(isolation) == TEST_PASS);
+    puts("mshv isolation mock checks passed");
+    assert(concurrent_opens == 65 && concurrent_fds == 195 && concurrent_closes == 195);
+    for (int step = 1; step <= 256; ++step) {
+        fail_at = step;
+        assert(execute(concurrent) == TEST_FAIL);
+    }
+    fail_at = 0;
+    for (int step = 1; step <= concurrent_opens; ++step) {
+        fail_open_at = step;
+        assert(execute(concurrent) == TEST_FAIL);
+    }
+    fail_open_at = 0;
+    for (int step = 1; step <= concurrent_fds; ++step) {
+        fail_fd_at = step;
+        assert(execute(concurrent) == TEST_FAIL);
+    }
+    fail_fd_at = 0;
+    for (int step = 1; step <= concurrent_closes; ++step) {
+        fail_close_at = step;
+        assert(execute(concurrent) == TEST_FAIL);
+    }
+    fail_close_at = 0;
+    break_release = 1;
+    assert(execute(concurrent) == TEST_FAIL);
+    assert(release_breaks >= 1);
+    break_release = 0;
+    corrupt_read = 1;
+    assert(execute(concurrent) == TEST_FAIL);
+    corrupt_read = 0;
+    assert(execute(concurrent) == TEST_PASS);
+    puts("mshv concurrency mock checks passed");
+    /* Cover both failure bursts, successful retries and the final cycle. */
+    for (int step = 1; step <= 64; ++step) {
+        fail_at = step;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    fail_at = unwind_calls;
+    assert(execute(unwind) == TEST_FAIL);
+    fail_at = 0;
+    for (int step = 1; step <= unwind_opens; ++step) {
+        fail_open_at = step;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    fail_open_at = 0;
+    for (int step = 1; step <= unwind_fds; ++step) {
+        fail_fd_at = step;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    fail_fd_at = 0;
+    for (int step = 1; step <= unwind_closes; ++step) {
+        fail_close_at = step;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    fail_close_at = 0;
+    fail_get_limit = 1;
+    assert(execute(unwind) == TEST_FAIL);
+    fail_get_limit = 0;
+    for (int step = 1; step <= 32; ++step) {
+        fail_set_limit_at = step;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    for (int step = unwind_limits - 2; step <= unwind_limits; ++step) {
+        fail_set_limit_at = step;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    fail_set_limit_at = 0;
+    for (int mode = 1; mode <= 2; ++mode) {
+        damage_unwind = mode;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    damage_unwind = 0;
+    retain_failed_vp = 1;
+    assert(execute(unwind) == TEST_FAIL);
+    retain_failed_vp = 0;
+    for (int mode = 1; mode <= 2; ++mode) {
+        unexpected_creation = mode;
+        assert(execute(unwind) == TEST_FAIL);
+    }
+    unexpected_creation = 0;
+    assert(execute(unwind) == TEST_PASS);
+    puts("mshv unwind mock checks passed");
     struct mshv_fixture f = {.device = -1, .partition = -1, .vp = -1};
     assert(mshv_roundtrip(&f, 0, 0) == TEST_FAIL);
     assert(mshv_roundtrip(&f, 5, 0) == TEST_FAIL);
+    assert(mshv_check_gprs(&f, 0, 0) == TEST_FAIL);
+    assert(mshv_check_gprs(&f, 5, 0) == TEST_FAIL);
     puts("mshv mock checks passed");
     return 0;
 }

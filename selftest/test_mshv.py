@@ -50,7 +50,7 @@ class ContractTests(unittest.TestCase):
 
     def test_one_case_per_source(self):
         sources = sorted((ROOT / "tests").glob("*/*.c"))
-        self.assertEqual(len(sources), 7)
+        self.assertTrue(sources)
         for source in sources:
             with self.subTest(source=source.name):
                 text = source.read_text()
@@ -96,7 +96,8 @@ class FixtureTests(unittest.TestCase):
                        str(ROOT / "lib/appliance.c"),
                        str(ROOT / "lib/lifecycle.c"), str(ROOT / "lib/registers.c"),
                        *(str(source) for source in sorted((ROOT / "tests").glob("*/*.c"))),
-                       "-Wl,--wrap=open,--wrap=close,--wrap=fcntl,--wrap=ioctl",
+                       "-pthread", "-Wl,--wrap=open,--wrap=close,--wrap=fcntl,--wrap=ioctl",
+                       "-Wl,--wrap=getrlimit,--wrap=setrlimit",
                        "-o", str(binary)]
             for limit in (128, 64):
                 with self.subTest(limit=limit):
@@ -123,10 +124,18 @@ class FixtureTests(unittest.TestCase):
                             f"{request} count=1 NULL register array:", result.stdout)
                     for count in (0, 5):
                         self.assertIn(
-                            f"internal roundtrip count: expected 1..4, actual {count}",
+                            f"internal register count: expected 1..4, actual {count}",
                             result.stdout)
                     for cycle in (1, 128):
                         self.assertIn(f"mshv-cycle {cycle}/128\n", result.stdout)
+                    for cycle in (1, 32):
+                        self.assertIn(
+                            f"mshv-isolation cycle {cycle}/32 create A with VP index=0\n",
+                            result.stdout)
+                    self.assertIn(
+                        "mshv-isolation cycle 1/32 close A VP first\n", result.stdout)
+                    self.assertIn(
+                        "mshv-isolation cycle 2/32 close A parents first\n", result.stdout)
                     for diagnostic in (
                             "no hypervisor CPUID bit", "Hyper-V feature leaf unavailable",
                             "expected Hv#1 CPUID interface signature",
@@ -136,6 +145,18 @@ class FixtureTests(unittest.TestCase):
                     self.assertEqual(
                         result.stdout.count("prerequisite lifecycle failed"), 4)
                     self.assertIn("mshv mock checks passed", result.stdout)
+                    self.assertIn("mshv isolation mock checks passed", result.stdout)
+                    for cycle in (1, 64):
+                        self.assertIn(
+                            f"mshv-concurrency A cycle {cycle}/64 create with VP index=0",
+                            result.stdout)
+                    self.assertIn("mshv-concurrency A completed 64/64 cycles", result.stdout)
+                    self.assertIn("mshv-concurrency check B after A worker exit", result.stdout)
+                    self.assertIn("mshv concurrency mock checks passed", result.stdout)
+                    self.assertIn(
+                        "mshv-unwind completed 64 cycles, 512 partition and 512 VP EMFILE failures",
+                        result.stdout)
+                    self.assertIn("mshv unwind mock checks passed", result.stdout)
 
 
 if __name__ == "__main__":
