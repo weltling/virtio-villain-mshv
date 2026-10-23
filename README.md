@@ -202,8 +202,24 @@ Hyper-V loaders. It also copies both CPU vendor hypervisor binaries and
 `kdstub.dll`. All inputs must be readable by the current user. The builder
 never elevates privileges. Use `--esp PATH` to select a readable copy of
 the ESP components, or set `MSHV_ESP` for both the builder and suite.
-No host boot files or firmware settings are modified. No additional boot
-components are downloaded or installed.
+No host boot files or firmware settings are modified. ESP components are
+not downloaded or installed.
+
+Firmware selection prefers `/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd`.
+If absent, the runner and image builder resolve the latest
+[Cloud Hypervisor edk2 release](https://github.com/cloud-hypervisor/edk2/releases/latest)
+and download its PVH ELF asset `CLOUDHV.fd`. The download must match the
+SHA256 published by GitHub. Firmware stays outside the guest disk.
+An unreadable or invalid installed file is an error, not a download trigger.
+
+Use `--firmware PATH` to select a local file without downloading.
+Use `--offline` to forbid network access and reuse installed firmware or
+the last verified cached release. The cache is under
+`$XDG_CACHE_HOME/virtio-villain/firmware`, defaulting to
+`~/.cache/virtio-villain/firmware`. Online fallback checks for the latest
+release even when a previous release is cached. Download failures do not
+silently select an older version. New upstream firmware still requires
+boot validation in the supported environment.
 
 The output directory contains `boot.img`, `firmware.fd`, `grub.cfg` and
 `manifest.json`. The manifest records source paths and hashes. Temporary
@@ -227,6 +243,13 @@ The suite selects the nested boot environment automatically. It uses the
 neighboring Cloud Hypervisor build with `nested=on`. Use `--vmm PATH` or set
 `MSHV_VMM` to select another Cloud Hypervisor binary. This boot path requires
 `bzImage`, not an ELF `vmlinux` image.
+
+Before launching tests, preflight checks that all boot inputs are readable
+regular files. It checks PE/COFF component headers, UEFI firmware volumes,
+bzImage boot signatures and gzip/newc archive headers. Invalid inputs stop
+the run as an infrastructure failure. Format checks do not establish
+component provenance or guarantee boot compatibility.
+The selected VMM and image construction tools must also be executable.
 
 The suite uses `target/kernel-microsoft/images/bzImage-x86_64` from its own
 directory by default. Build it with `make kernel`. Use
