@@ -114,7 +114,7 @@ for rebuilding VMMs but are not needed to compile the C test executable.
 ```sh
 cd ~/virtio-villain-mshv
 make -j init initramfs
-make kernel RUSTC=false
+make kernel
 make selftest lint
 ./run-mshv --list
 ```
@@ -128,10 +128,10 @@ names remain aliases for the complete archive build.
 The wrapper also accepts `VV_ROOT` as an environment variable. All suite and
 kernel outputs are beneath `target` in this directory, not the public repo.
 
-The Microsoft configuration records Rust compiler probe versions as zero.
-`RUSTC=false` is a make command line override to match that C configuration
-even when Rust is installed for VMM development. No kernel configuration
-options are silently discarded. The kernel build uses all available CPU cores.
+The kernel target disables Rust compiler probing to match the selected
+Microsoft C configuration, even when Rust is installed for VMM development.
+No extra command line setting is required. No kernel configuration options
+are silently discarded. The kernel build uses all available CPU cores.
 
 Outputs:
 
@@ -186,7 +186,7 @@ neighboring Cloud Hypervisor build with `nested=on`. Use `--vmm PATH` or set
 `bzImage`, not an ELF `vmlinux` image.
 
 The suite uses `target/kernel-microsoft/images/bzImage-x86_64` from its own
-directory by default. Build it with `make kernel RUSTC=false`. Use
+directory by default. Build it with `make kernel`. Use
 `--kernel PATH` to select another image, including output from a custom
 `TARGET`. Missing or empty images are infrastructure errors. The runner
 does not download or build a kernel implicitly.
