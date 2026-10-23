@@ -36,6 +36,6 @@ selftest:
 	python3 -m unittest discover -s selftest -p 'test_*.py'
 
 lint:
-	python3 -m flake8 run-mshv launch-nested lib selftest
+	python3 -m flake8 run-mshv lib selftest
 
 .PHONY: contract init initramfs mshv mshv-initramfs kernel selftest lint
