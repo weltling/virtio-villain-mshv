@@ -158,7 +158,7 @@ The builder reads the host ESP and copies the installed shim, GRUB and
 Hyper-V loaders. It also copies both CPU vendor hypervisor binaries and
 `kdstub.dll`. All inputs must be readable by the current user. The builder
 never elevates privileges. Use `--esp PATH` to select a readable copy of
-the ESP components, or set `MSHV_ESP` for both the builder and launcher.
+the ESP components, or set `MSHV_ESP` for both the builder and suite.
 No host boot files or firmware settings are modified. No additional boot
 components are downloaded or installed.
 
@@ -177,7 +177,6 @@ Run the suite through the same shared framework:
 ```sh
 ~/virtio-villain/run \
   --suite ~/virtio-villain-mshv \
-  --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 120 --jobs 16
 ```
 
@@ -185,6 +184,12 @@ The suite selects the nested boot environment automatically. It uses the
 neighboring Cloud Hypervisor build with `nested=on`. Use `--vmm PATH` or set
 `MSHV_VMM` to select another Cloud Hypervisor binary. This boot path requires
 `bzImage`, not an ELF `vmlinux` image.
+
+The suite uses `target/kernel-microsoft/images/bzImage-x86_64` from its own
+directory by default. Build it with `make kernel RUSTC=false`. Use
+`--kernel PATH` to select another image, including output from a custom
+`TARGET`. Missing or empty images are infrastructure errors. The runner
+does not download or build a kernel implicitly.
 
 An initial nested Hyper-V boot reached the selected kernel. Guest CPUID
 `0x40000003` returned EBX `0x002bb9ff`. Preflight created a child partition
@@ -219,7 +224,6 @@ survive a hang of the outer Linux host.
 ~/virtio-villain/run \
   --suite ~/virtio-villain-mshv \
   --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
-  --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 180 --repeat 3 ML001 MR001 MR003
 ```
 
@@ -238,7 +242,6 @@ For example, from this directory:
 ```sh
 ./run-mshv \
   --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
-  --kernel target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 180 --repeat 3 ML001 MR001 MR003
 ```
 
