@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from villain.appliance import Suite, executable, source_catalog
 from .boot_image import FIRMWARE, build_image, resolve_firmware, validate_boot_inputs
-from .contract import COMMIT
+from .build import create_build
 from .sources import test_sources
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,9 +25,8 @@ class MshvSuite(Suite):
             "the latest cloud-hypervisor/edk2 CLOUDHV.fd with SHA256 verification. "
             "Boot files are checked before launching tests. "
             "Use make help in the suite directory for kernel config and build options.")
-        parser.add_argument("--vmm", default=os.environ.get(
-            "MSHV_VMM", str(ROOT.parent / "cloud-hypervisor/target/release/cloud-hypervisor")),
-            help="Cloud Hypervisor MSHV executable")
+        parser.add_argument("--vmm", default=os.environ.get("MSHV_VMM", "cloud-hypervisor"),
+                            help="Cloud Hypervisor MSHV executable (default: PATH lookup)")
         parser.add_argument("--firmware", type=Path, help="Explicit local UEFI firmware")
         parser.add_argument("--offline", action="store_true",
                             help="Use installed or cached firmware without network access")
@@ -71,10 +70,12 @@ class MshvSuite(Suite):
 
 
 def create_suite():
-    return MshvSuite(name="MSHV", contract=COMMIT, binary=ROOT / "target/mshv/init",
-                     initramfs=ROOT / "target/mshv/initramfs.cpio.gz",
+    build = create_build(ROOT)
+    context = build.context()
+    return MshvSuite(name="MSHV", contract="mshv-uapi-v1", binary=context.binary,
+                     initramfs=context.initramfs, build_spec=build,
                      protocol_prefix="MSHV", host_shutdown=True,
-                     kernel=ROOT / "target/kernel-microsoft/images/bzImage-x86_64",
                      kernel_build_hint=(
-                         f"Build it with make -C {ROOT} kernel, "
+                         f"Build it with make -C {ROOT} kernel "
+                         "MSHV_SOURCE=PATH KERNEL_CONFIGS=PATH, "
                          "or select another image with --kernel PATH."))
