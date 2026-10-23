@@ -104,7 +104,7 @@ Thus `nested=on` alone is not enough to run these UAPI tests.
 Do not bypass the privilege check or change the expected test results.
 The suite uses the nested Hyper-V boot image described below to supply
 the required environment.
-Actual child partition creation and all seven UAPI tests passed with it.
+Actual child partition creation and the original seven UAPI tests passed with it.
 
 ## Build
 
@@ -288,7 +288,7 @@ download or build a kernel implicitly.
 
 An initial nested Hyper-V boot reached the selected kernel. Guest CPUID
 `0x40000003` returned EBX `0x002bb9ff`. Preflight created a child partition
-and VP, and `ML001` returned PASS. The kernel then hit a BUG in
+and VP, and the lifecycle check returned PASS. The kernel then hit a BUG in
 `hv_machine_power_off` during shutdown. The launcher timed out, so the
 overall run was an infrastructure failure.
 
@@ -348,7 +348,7 @@ output.
 runs all tests. `--output PATH` selects a new diagnostics directory.
 Each test gets a fresh VM boot with its own console log and timeout.
 `--jobs N` limits concurrent VMs, with one as the default. For example,
-`--jobs 16` runs the seven selected cases concurrently without sharing VMs.
+`--jobs 16` runs the selected cases concurrently without sharing VMs.
 `--repeat 3` runs three complete sequences of those separate boots.
 Use `--console` or `-c` for live VM output with complete logs retained.
 Console mode runs one VM at a time regardless of `--jobs`. The final summary
@@ -393,7 +393,7 @@ observation for these tests.
 
 The selected kernel and appliance have booted beneath nested Hyper-V.
 Parent partition privileges and actual child partition creation succeeded.
-All seven tests passed against the real kernel UAPI in separate boots.
+The original seven tests passed against the real kernel UAPI in separate boots.
 Repeated successful full suite runs remain an unverified acceptance check.
 A successful build, host selftest, or ordinary guest boot alone does not
 satisfy appliance validation.
