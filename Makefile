@@ -21,7 +21,7 @@ init: contract
 	  CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)"
 
 initramfs: init
-	python3 "$(VV_ROOT)/lib/initramfs.py" --init "$(TARGET)/mshv/init" \
+	python3 "$(VV_ROOT)/lib/python/villain/initramfs.py" --init "$(TARGET)/mshv/init" \
 	  --output "$(TARGET)/mshv/initramfs.cpio.gz"
 
 mshv mshv-initramfs: initramfs

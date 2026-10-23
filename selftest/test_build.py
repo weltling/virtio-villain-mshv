@@ -22,7 +22,7 @@ class BuildTests(unittest.TestCase):
                 root = Path(temporary)
                 framework = root / "framework"
                 (root / "lib").mkdir()
-                (framework / "lib").mkdir(parents=True)
+                (framework / "lib/python/villain").mkdir(parents=True)
                 events = root / "events"
                 (root / "lib/contract.py").write_text(
                     "from pathlib import Path\n"
@@ -46,11 +46,11 @@ class BuildTests(unittest.TestCase):
                     "elf[:6] = b'\\x7fELF\\x02\\x01'\n"
                     "struct.pack_into('<HH', elf, 54, 56, 0)\n"
                     "(output / 'init').write_bytes(elf)\n")
-                (framework / "lib/initramfs.py").write_text(
+                (framework / "lib/python/villain/initramfs.py").write_text(
                     "from pathlib import Path\n"
                     "import sys\n"
-                    f"sys.path.insert(0, {str(FRAMEWORK)!r})\n"
-                    "from lib.initramfs import main\n"
+                    f"sys.path.insert(0, {str(FRAMEWORK / 'lib/python')!r})\n"
+                    "from villain.initramfs import main\n"
                     f"with Path({str(events)!r}).open('a') as stream:\n"
                     "    stream.write('pack\\n')\n"
                     "main()\n")
