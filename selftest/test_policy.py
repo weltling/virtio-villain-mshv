@@ -17,6 +17,23 @@ from villain import appliance  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
+    def test_default_kernel_matches_the_suite_build_output(self):
+        suite = appliance.load_suite(ROOT)
+        expected = ROOT / "target/kernel-microsoft/images/bzImage-x86_64"
+        self.assertEqual(suite.kernel, expected)
+        self.assertIn(f"make -C {ROOT} kernel RUSTC=false", suite.kernel_build_hint)
+        self.assertEqual(appliance.parse_args(suite, ["--list"]).kernel, expected)
+        with tempfile.TemporaryDirectory() as work:
+            kernel = Path(work) / "built-kernel"
+            archive = Path(work) / "archive"
+            kernel.write_bytes(b"kernel")
+            archive.write_bytes(b"archive")
+            suite.kernel = kernel
+            suite.initramfs = archive
+            args = appliance.parse_args(suite, ["ML001"])
+            command = suite.build_command(args, ["ML001"], "token")
+            self.assertEqual(command[command.index("--kernel") + 1], str(kernel))
+
     def test_source_listing_without_an_appliance_binary(self):
         output = io.StringIO()
         with patch.object(appliance.subprocess, "run",
