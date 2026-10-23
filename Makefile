@@ -9,8 +9,6 @@ SUITE_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 VV_ROOT ?= $(abspath $(SUITE_ROOT)/../virtio-villain)
 KERNEL_CONFIGS ?=
 KERNEL_ARGS ?=
-TEST_SRCS = $(sort $(wildcard tests/*/*.c))
-SRCS = bin/mshv.c lib/lifecycle.c lib/registers.c $(TEST_SRCS)
 
 .DEFAULT_GOAL := initramfs
 
@@ -18,8 +16,9 @@ contract:
 	python3 lib/contract.py --source "$(MSHV_SOURCE)" --output "$(TARGET)/mshv/contract.h"
 
 init: contract
+	sources="$$(python3 "$(SUITE_ROOT)/lib/sources.py" "$(CURDIR)")" && \
 	$(MAKE) -C "$(VV_ROOT)" appliance CC="$(CC)" \
-	  APPLIANCE_SRCS="$(addprefix $(CURDIR)/,$(SRCS))" \
+	  APPLIANCE_SRCS="$$sources" \
 	  APPLIANCE_TARGET="$(abspath $(TARGET))/mshv" \
 	  APPLIANCE_CPPFLAGS="-I$(CURDIR) -I$(abspath $(TARGET))/mshv" \
 	  CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)"

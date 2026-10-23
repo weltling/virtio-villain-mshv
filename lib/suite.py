@@ -8,13 +8,14 @@ import re
 from villain.appliance import Suite, source_catalog
 from .boot_image import build_image
 from .contract import COMMIT
+from .sources import test_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class MshvSuite(Suite):
     def list_tests(self, binary):
-        return source_catalog(ROOT.glob("tests/*/*.c"), "REGISTER_MSHV_TEST")
+        return source_catalog(test_sources(ROOT), "REGISTER_MSHV_TEST")
 
     def add_arguments(self, parser):
         parser.epilog = (
