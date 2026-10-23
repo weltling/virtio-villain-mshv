@@ -14,7 +14,7 @@ def main():
     parser.add_argument("root", type=Path, help="Suite source directory")
     root = parser.parse_args().root
     sources = [root / name for name in (
-        "bin/mshv.c", "lib/lifecycle.c", "lib/registers.c")]
+        "bin/mshv.c", "lib/appliance.c", "lib/lifecycle.c", "lib/registers.c")]
     print(" ".join(map(str, [*sources, *test_sources(root)])))
 
 

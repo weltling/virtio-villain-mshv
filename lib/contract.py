@@ -10,7 +10,8 @@ import subprocess
 
 COMMIT = "d461acfb591c198755f6e84494f8a68a3b6d8bd2"
 STRUCTS = ("mshv_create_partition", "mshv_create_vp", "mshv_vp_registers")
-DEFINES = ("MSHV_IOCTL", "MSHV_CREATE_PARTITION", "MSHV_INITIALIZE_PARTITION",
+ENUMS = ("MSHV_PT_BIT_LAPIC", "MSHV_PT_ISOLATION_NONE")
+DEFINES = ("MSHV_IOCTL", "MSHV_PT_FLAGS_MASK", "MSHV_CREATE_PARTITION", "MSHV_INITIALIZE_PARTITION",
            "MSHV_CREATE_VP", "MSHV_VP_MAX_REGISTERS", "MSHV_GET_VP_REGISTERS",
            "MSHV_SET_VP_REGISTERS")
 
@@ -26,6 +27,12 @@ def extract(source):
         raise RuntimeError("MSHV contract source has tracked modifications")
     text = (source / "include/uapi/linux/mshv.h").read_text()
     snippets = []
+    for name in ENUMS:
+        match = re.search(
+            r"enum\s*\{(?=[^}]*\b" + re.escape(name) + r"\b)[^}]+\};", text)
+        if match is None:
+            raise RuntimeError(f"Missing UAPI enumeration containing {name}")
+        snippets.append(match[0])
     for name in STRUCTS:
         match = re.search(r"struct " + name + r" \{[^}]+\};", text)
         if match is None:

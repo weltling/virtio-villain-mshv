@@ -16,12 +16,14 @@
 test_result_t mshv_roundtrip(struct mshv_fixture *f, unsigned count, uint64_t seed)
 {
     const uint32_t names[] = {VV_RAX, VV_RCX, VV_RDX, VV_RBX};
-    struct hv_register_assoc regs[4] = {0};
+    enum { REGISTER_COUNT = sizeof(names) / sizeof(names[0]) };
+    struct hv_register_assoc regs[REGISTER_COUNT] = {0};
     struct mshv_vp_registers args = {.count = count, .regs = regs};
-    uint64_t expected[4];
+    uint64_t expected[REGISTER_COUNT];
 
-    if (count == 0 || count > 4)
-        TFAIL("internal roundtrip count: expected 1..4, actual %u", count);
+    if (count == 0 || count > REGISTER_COUNT)
+        TFAIL("internal roundtrip count: expected 1..%u, actual %u",
+              (unsigned)REGISTER_COUNT, count);
     for (unsigned i = 0; i < count; ++i) {
         regs[i].name = names[i];
         expected[i] = seed ^ (0x1111111111111111ULL * i);

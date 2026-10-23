@@ -9,6 +9,8 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -52,32 +54,50 @@ test_result_t mshv_cleanup(struct mshv_fixture *f)
     return result;
 }
 
-test_result_t mshv_check_fd(int fd, const char *operation)
+test_result_t mshv_check_fd(int fd, const char *operation, ...)
 {
+    int actual_errno = errno;
+    int flags = -1;
+    if (fd >= 0) {
+        flags = fcntl(fd, F_GETFD);
+        actual_errno = flags < 0 ? errno : 0;
+    }
+    if (flags >= 0 && (flags & FD_CLOEXEC))
+        return TEST_PASS;
+    printf("vv-fail %s:%d: ", __FILE__, __LINE__);
+    va_list args;
+    va_start(args, operation);
+    vprintf(operation, args);
+    va_end(args);
     if (fd < 0)
-        TFAIL("%s: expected resource fd >= 0, actual %d errno=%d (%s)",
-              operation, fd, errno, strerror(errno));
-    int flags = fcntl(fd, F_GETFD);
-    if (flags < 0 || !(flags & FD_CLOEXEC))
-        TFAIL("%s: fd=%d expected F_GETFD with FD_CLOEXEC, actual %d errno=%d",
-              operation, fd, flags, errno);
-    return TEST_PASS;
+        printf(": expected resource fd >= 0, actual %d errno=%d (%s)\n",
+               fd, actual_errno, strerror(actual_errno));
+    else
+        printf(": fd=%d expected F_GETFD with FD_CLOEXEC, actual %d errno=%d\n",
+               fd, flags, actual_errno);
+    fflush(stdout);
+    return TEST_FAIL;
 }
 
 test_result_t mshv_create(struct mshv_fixture *f)
 {
-    struct mshv_create_partition partition = {0};
+    struct mshv_create_partition partition = {
+        .pt_flags = VV_MSHV_PARTITION_FLAGS_NONE,
+        .pt_isolation = MSHV_PT_ISOLATION_NONE,
+    };
     struct mshv_create_vp vp = {.vp_index = 0};
 
     f->device = open("/dev/mshv", O_RDWR | O_CLOEXEC);
     if (mshv_check_fd(f->device, "open /dev/mshv") != TEST_PASS)
         return TEST_FAIL;
     f->partition = ioctl(f->device, MSHV_CREATE_PARTITION, &partition);
-    if (mshv_check_fd(f->partition, "MSHV_CREATE_PARTITION flags=0 isolation=0") != TEST_PASS)
+    if (mshv_check_fd(f->partition,
+                      "MSHV_CREATE_PARTITION flags=0x%" PRIx64 " isolation=0x%" PRIx64,
+                      (uint64_t)partition.pt_flags, (uint64_t)partition.pt_isolation) != TEST_PASS)
         return TEST_FAIL;
     if (mshv_expect_ioctl(f->partition, MSHV_INITIALIZE_PARTITION, NULL,
                           "MSHV_INITIALIZE_PARTITION", 0) != TEST_PASS)
         return TEST_FAIL;
     f->vp = ioctl(f->partition, MSHV_CREATE_VP, &vp);
-    return mshv_check_fd(f->vp, "MSHV_CREATE_VP index=0");
+    return mshv_check_fd(f->vp, "MSHV_CREATE_VP index=%u", vp.vp_index);
 }
