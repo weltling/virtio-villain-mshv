@@ -6,6 +6,8 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +19,51 @@ from villain import appliance  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("make"), "Make required for source selection checks")
+    def test_build_and_listing_select_the_same_tests(self):
+        suite = appliance.load_suite(ROOT)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lib").mkdir()
+            (root / "lib/contract.py").write_text("pass\n")
+            framework = root / "framework"
+            framework.mkdir()
+            record = root / "sources"
+            (framework / "Makefile").write_text(
+                f"appliance:\n\t@printf '%s\\n' \"$(APPLIANCE_SRCS)\" > '{record}'\n")
+            paths = {
+                "ML010": root / "tests/ml/first.c",
+                "ML030": root / "tests/ml/added.c",
+                "MR020": root / "tests/mr/second.c"}
+            for name in ("ML010", "MR020"):
+                path = paths[name]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f'REGISTER_MSHV_TEST({name}, test, "Fixture {name}");\n')
+            ignored = root / "tests/ml/nested/ignored.c"
+            ignored.parent.mkdir()
+            ignored.write_text('REGISTER_MSHV_TEST(XX001, test, "Ignored");\n')
+            (root / "tests/ignored.c").write_text(
+                'REGISTER_MSHV_TEST(XX002, test, "Ignored");\n')
+            for names in (
+                    ("ML010", "MR020"), ("ML010", "ML030", "MR020"), ("ML030", "MR020")):
+                with self.subTest(names=names):
+                    if "ML030" in names:
+                        paths["ML030"].write_text(
+                            'REGISTER_MSHV_TEST(ML030, test, "Fixture ML030");\n')
+                    if "ML010" not in names:
+                        paths["ML010"].unlink()
+                    subprocess.run([
+                        "make", "--no-print-directory", "-C", str(root),
+                        "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}", "init",
+                    ], check=True, capture_output=True, text=True, timeout=20)
+                    expected = [root / name for name in (
+                        "bin/mshv.c", "lib/lifecycle.c", "lib/registers.c")]
+                    expected.extend(sorted(paths[name] for name in names))
+                    self.assertEqual(record.read_text().split(), list(map(str, expected)))
+                    with patch.dict(suite.list_tests.__globals__, {"ROOT": root}):
+                        self.assertEqual(suite.list_tests(None), {
+                            name: f"Fixture {name}" for name in names})
+
     def test_execution_help_exposes_environment_and_build_help(self):
         with contextlib.redirect_stdout(io.StringIO()) as output, \
              self.assertRaises(SystemExit) as exit:

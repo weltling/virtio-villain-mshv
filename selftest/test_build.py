@@ -17,6 +17,73 @@ FRAMEWORK = ROOT.parent / "virtio-villain"
 
 @unittest.skipUnless(shutil.which("make"), "Make required for build checks")
 class BuildTests(unittest.TestCase):
+    def test_build_and_wrapper_use_the_same_framework_location(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            suite = root / "checkouts/mshv"
+            suite.mkdir(parents=True)
+            for name in ("Makefile", "run-mshv"):
+                shutil.copy(ROOT / name, suite / name)
+            record = root / "wrapper.json"
+            default = suite.parent / "virtio-villain"
+            alternate = root / "alternate"
+            for framework in (default, alternate):
+                framework.mkdir()
+                runner = framework / "run"
+                runner.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import json, sys\n"
+                    "from pathlib import Path\n"
+                    f"Path({str(record)!r}).write_text(json.dumps("
+                    "{'runner': __file__, 'argv': sys.argv[1:]}))\n")
+                runner.chmod(0o755)
+            environment = dict(os.environ, HOME=str(root / "unrelated-home"))
+            environment.pop("VV_ROOT", None)
+            for framework in (default, alternate):
+                with self.subTest(framework=framework):
+                    if framework == alternate:
+                        environment["VV_ROOT"] = str(alternate)
+                    result = subprocess.run([
+                        "make", "--no-print-directory", "-C", str(root),
+                        "-f", str(suite / "Makefile"), "help",
+                    ], env=environment, check=True, capture_output=True,
+                        text=True, timeout=20)
+                    self.assertIn(f"(current: {framework})", result.stdout)
+                    subprocess.run([
+                        str(suite / "run-mshv"), "--list",
+                    ], cwd=root, env=environment, check=True,
+                        capture_output=True, text=True, timeout=20)
+                    self.assertEqual(json.loads(record.read_text()), {
+                        "runner": str(framework / "run"),
+                        "argv": ["--suite", str(suite), "--list"]})
+            result = subprocess.run([
+                "make", "--no-print-directory", "-C", str(root),
+                "-f", str(suite / "Makefile"), f"VV_ROOT={default}", "help",
+            ], env=environment, check=True, capture_output=True,
+                text=True, timeout=20)
+            self.assertIn(f"(current: {default})", result.stdout)
+
+    def test_source_selection_failure_stops_the_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copyfile(ROOT / "Makefile", root / "Makefile")
+            (root / "lib").mkdir()
+            (root / "lib/contract.py").write_text("pass\n")
+            (root / "lib/sources.py").write_text(
+                "raise SystemExit('fixture source selection failure')\n")
+            framework = root / "framework"
+            framework.mkdir()
+            marker = root / "unexpected-build"
+            (framework / "Makefile").write_text(
+                f"appliance:\n\t@touch '{marker}'\n")
+            result = subprocess.run([
+                "make", "--no-print-directory", "-C", str(root),
+                f"VV_ROOT={framework}", "init",
+            ], capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fixture source selection failure", result.stderr)
+            self.assertFalse(marker.exists())
+
     def test_kernel_target_disables_rust_probing_without_a_command_line_override(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
