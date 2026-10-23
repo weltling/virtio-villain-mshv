@@ -9,7 +9,7 @@
 #include "lib/test_runner.h"
 
 #if !defined(__x86_64__)
-#error "The initial MSHV contract supports x86_64 only"
+#error "The MSHV test ABI supports x86_64 only"
 #endif
 
 enum vv_cpuid_leaf {
@@ -33,6 +33,32 @@ enum vv_hyperv_partition_privilege {
 
 #define VV_MSHV_PARTITION_FLAGS_NONE UINT64_C(0)
 
+/* Arbitrary GPR test patterns, not Hyper-V ABI constants. */
+#define VV_GPR_SEED_ASCENDING UINT64_C(0x0123456789abcdef)
+#define VV_GPR_SEED_DESCENDING UINT64_C(0xfedcba9876543210)
+#define VV_GPR_SEED_LIFECYCLE UINT64_C(0x123456789abcdef0)
+#define VV_GPR_SEED_VP_FIRST UINT64_C(0x1020304050607080)
+#define VV_GPR_PATTERN_EDGE_BITS UINT64_C(0x8000000000000001)
+#define VV_GPR_REGISTER_STRIDE UINT64_C(0x1111111111111111)
+#define VV_GPR_CYCLE_XOR UINT64_C(0x0101010101010101)
+#define VV_GPR_LOW32_MASK UINT64_C(0x00000000ffffffff)
+
+#define VV_GPR_SEED_MISMATCHED_ROUTING UINT64_C(0x1122334455667788)
+#define VV_GPR_SEED_INVALID_DESCRIPTOR UINT64_C(0x2233445566778899)
+#define VV_GPR_SEED_NULL_POINTER_FAULTS UINT64_C(0x33445566778899aa)
+#define VV_GPR_SEED_CREATION_BOUNDARIES UINT64_C(0x445566778899aabb)
+#define VV_GPR_SEED_UNINITIALIZED_PARTITION UINT64_C(0x5566778899aabbcc)
+#define VV_GPR_SEED_VP_CPUID UINT64_C(0x66778899aabbccdd)
+#define VV_GPR_SEED_VP_STATE UINT64_C(0x778899aabbccddee)
+#define VV_GPR_SEED_PARTITION_PROPERTY UINT64_C(0x8899aabbccddeeff)
+#define VV_GPR_SEED_GUEST_MEMORY UINT64_C(0x99aabbccddeeff00)
+#define VV_GPR_SEED_IRQ_EVENTFD UINT64_C(0xaabbccddeeff0011)
+
+#define VV_GPR_SEED_INVALID_COUNT UINT64_C(0x1111222233334444)
+#define VV_GPR_SEED_NULL_ARGUMENT UINT64_C(0x5555666677778888)
+#define VV_GPR_SEED_NULL_REGISTERS UINT64_C(0x9999aaaabbbbcccc)
+#define VV_GPR_SEED_FORBIDDEN_REGISTER UINT64_C(0xdeadbeef12345678)
+
 /* TLFS register association: MBZ fields and a 128-bit value slot. */
 struct hv_register_assoc {
     uint32_t name;
@@ -44,7 +70,7 @@ struct hv_register_assoc {
     } value;
 } __attribute__((packed));
 
-#include "contract.h"
+#include "lib/ioctls.h"
 
 _Static_assert(sizeof(struct hv_register_assoc) == 32, "register association ABI");
 _Static_assert(offsetof(struct hv_register_assoc, value) == 16, "register value ABI");
@@ -81,6 +107,8 @@ test_result_t mshv_check_fd(int fd, const char *operation, ...)
     __attribute__((format(printf, 2, 3)));
 test_result_t mshv_close(int *fd, const char *operation);
 test_result_t mshv_cleanup(struct mshv_fixture *f);
+test_result_t mshv_set_gprs(struct mshv_fixture *f, unsigned count, uint64_t seed);
+test_result_t mshv_check_gprs(struct mshv_fixture *f, unsigned count, uint64_t seed);
 test_result_t mshv_roundtrip(struct mshv_fixture *f, unsigned count, uint64_t seed);
 test_result_t mshv_expect_ioctl(int fd, unsigned long request, void *arg,
                               const char *operation, int expected_errno);

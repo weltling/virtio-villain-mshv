@@ -4,7 +4,7 @@
 int main(int argc, char **argv)
 {
     const struct vv_test_suite suite = {
-        .contract = VV_MSHV_CONTRACT,
+        .contract = VV_MSHV_SUITE_ID,
         .protocol_prefix = "MSHV",
         .begin = __start_mshv_registry,
         .end = __stop_mshv_registry,
