@@ -56,4 +56,8 @@ class MshvSuite(Suite):
 def create_suite():
     return MshvSuite(name="MSHV", contract=COMMIT, binary=ROOT / "target/mshv/init",
                      initramfs=ROOT / "target/mshv/initramfs.cpio.gz",
-                     protocol_prefix="MSHV", host_shutdown=True)
+                     protocol_prefix="MSHV", host_shutdown=True,
+                     kernel=ROOT / "target/kernel-microsoft/images/bzImage-x86_64",
+                     kernel_build_hint=(
+                         f"Build it with make -C {ROOT} kernel RUSTC=false, "
+                         "or select another image with --kernel PATH."))
