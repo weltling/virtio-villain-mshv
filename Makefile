@@ -36,6 +36,9 @@ kernel:
 	  --cache-dir "$(abspath $(TARGET))/kernel-cache" --offline --jobs "$$(nproc)" \
 	  $(KERNEL_ARGS)
 
+clean:
+	python3 "$(VV_ROOT)/lib/python/villain/clean.py" --root "$(CURDIR)" "$(TARGET)"
+
 selftest:
 	python3 -m unittest discover -s selftest -p 'test_*.py'
 
@@ -51,6 +54,7 @@ help:
 	@echo "  kernel              Build the selected Linux source offline"
 	@echo "  selftest            Run host tests without booting an appliance"
 	@echo "  lint                Run Python lint"
+	@echo "  clean               Remove the entire selected output directory"
 	@echo "  help                Show this message"
 	@echo ""
 	@echo "Build variables:"
@@ -75,6 +79,8 @@ help:
 	@echo '  $(VV_ROOT)/build-kernel --help lists all generic kernel build options'
 	@echo ""
 	@echo "Relative paths are resolved from this suite directory."
+	@echo "clean also removes cached boot components, kernel caches and saved results in TARGET."
+	@echo "Keep reusable boot inputs outside TARGET and select them with MSHV_ESP."
 	@echo "Use the framework run --suite PATH --help for execution options."
 
-.PHONY: contract init initramfs mshv mshv-initramfs kernel selftest lint help
+.PHONY: contract init initramfs mshv mshv-initramfs kernel clean selftest lint help
