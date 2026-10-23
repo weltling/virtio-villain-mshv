@@ -21,7 +21,7 @@ class PolicyTests(unittest.TestCase):
         suite = appliance.load_suite(ROOT)
         expected = ROOT / "target/kernel-microsoft/images/bzImage-x86_64"
         self.assertEqual(suite.kernel, expected)
-        self.assertIn(f"make -C {ROOT} kernel RUSTC=false", suite.kernel_build_hint)
+        self.assertIn(f"make -C {ROOT} kernel,", suite.kernel_build_hint)
         self.assertEqual(appliance.parse_args(suite, ["--list"]).kernel, expected)
         with tempfile.TemporaryDirectory() as work:
             kernel = Path(work) / "built-kernel"
