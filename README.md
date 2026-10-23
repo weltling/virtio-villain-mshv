@@ -98,11 +98,10 @@ on the selected kernel and shut down cleanly. CPUID `0x40000003` returned
 EBX `0x00020000`. The `CreatePartitions` bit was absent, so preflight reported
 an infrastructure failure without executing any assertions.
 
-Thus `nested=on` on this launcher is not enough to run these UAPI tests.
+Thus `nested=on` alone is not enough to run these UAPI tests.
 Do not bypass the privilege check or change the expected test results.
-An external `--launcher` can supply an appropriately
-provisioned Hyper-V environment without changing the suite or framework.
-The nested Hyper-V boot image described below supplies that environment.
+The suite uses the nested Hyper-V boot image described below to supply
+the required environment.
 Actual child partition creation and all seven UAPI tests passed with it.
 
 ## Build
@@ -146,9 +145,10 @@ Outputs:
 
 ### Nested Hyper-V boot image
 
-The direct Linux boot below does not grant parent privileges. To start a
-second Hyper-V instance before Linux, construct a separate UEFI boot disk
-from the installed components:
+The suite starts a second Hyper-V instance before Linux. Direct Linux boot
+does not grant the required parent privileges. The suite constructs a
+separate UEFI boot disk from the installed components for each test.
+To build a disk separately:
 
 ```sh
 python3 lib/boot_image.py --output target/nested-hyperv/appliance
@@ -177,15 +177,14 @@ Run the suite through the same shared framework:
 ```sh
 ~/virtio-villain/run \
   --suite ~/virtio-villain-mshv \
-  --launcher ~/virtio-villain-mshv/launch-nested \
   --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 120 --jobs 16
 ```
 
-`launch-nested` assembles a new disk for each test run. It uses the neighboring
-Cloud Hypervisor build with `nested=on`. Set `MSHV_VMM` to an absolute path to
-select another Cloud Hypervisor binary. This boot path requires `bzImage`,
-not the ELF `vmlinux` image used for direct Linux boot.
+The suite selects the nested boot environment automatically. It uses the
+neighboring Cloud Hypervisor build with `nested=on`. Use `--vmm PATH` or set
+`MSHV_VMM` to select another Cloud Hypervisor binary. This boot path requires
+`bzImage`, not an ELF `vmlinux` image.
 
 An initial nested Hyper-V boot reached the selected kernel. Guest CPUID
 `0x40000003` returned EBX `0x002bb9ff`. Preflight created a child partition
@@ -204,7 +203,7 @@ result protocol and stop handshake without a kernel panic. The tested
 kernel contract is commit `d461acfb591c198755f6e84494f8a68a3b6d8bd2`.
 Repeated full suite runs remain outstanding.
 
-### Direct Linux boot
+### Recovery and execution options
 
 Initial nested runs can proceed without external recovery. The runner
 enforces a process timeout. This can terminate a stuck launcher but cannot
@@ -217,13 +216,10 @@ and `disarm` with a run identifier, plus an arm deadline. The watchdog must
 survive a hang of the outer Linux host.
 
 ```sh
-sudo setcap cap_net_admin=ep \
-  ~/cloud-hypervisor/target/release/cloud-hypervisor
-
 ~/virtio-villain/run \
   --suite ~/virtio-villain-mshv \
   --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
-  --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/vmlinux-x86_64 \
+  --kernel ~/virtio-villain-mshv/target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 180 --repeat 3 ML001 MR001 MR003
 ```
 
@@ -242,20 +238,13 @@ For example, from this directory:
 ```sh
 ./run-mshv \
   --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
-  --kernel target/kernel-microsoft/images/vmlinux-x86_64 \
+  --kernel target/kernel-microsoft/images/bzImage-x86_64 \
   --timeout 180 --repeat 3 ML001 MR001 MR003
 ```
 
 The neighboring Cloud Hypervisor checkout must be built with its MSHV
-backend. Reapply `setcap` after rebuilding if the binary was replaced.
-The TAP capability supports the virtio test runner and is not evidence of
-Hyper-V child partition privileges.
-
-The default candidate launcher is `cloud-hypervisor` with `nested=on`, two
-vCPUs, 1 GiB RAM and serial output. Use `--vmm PATH` for another Cloud
-Hypervisor build. Use `--launcher EXECUTABLE` for an externally provisioned
-parent partition environment. It receives `--kernel`, `--initramfs`,
-`--cmdline` and `--run-id`. It must relay the console and remain attached.
+backend. The suite boots nested Hyper-V with two vCPUs, 2 GiB RAM and serial
+output.
 
 `--initramfs PATH` selects an explicit separate MSHV archive. Omitting test IDs
 runs all tests. `--output PATH` selects a new diagnostics directory.
