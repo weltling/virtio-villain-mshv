@@ -130,6 +130,32 @@ names remain aliases for the complete archive build.
 The wrapper also accepts `VV_ROOT` as an environment variable. All suite and
 kernel outputs are beneath `target` in this directory, not the public repo.
 
+The same build targets work from the framework directory:
+
+```sh
+make SUITE=../virtio-villain-mshv initramfs
+make SUITE=../virtio-villain-mshv kernel
+```
+
+Both directions use the private suite build definition. Contract generation,
+source selection and kernel policy remain in this repository.
+The suite Makefile also retains its existing targets and aliases.
+
+Use `./run-mshv --build ML001` to build the executable and initramfs before
+running a test. The equivalent framework command is
+`./run --suite ../virtio-villain-mshv --build ML001`.
+This does not build a kernel. Without `--build`, execution never builds
+implicitly.
+
+Use `TARGET=custom` with either Make entry point and
+`--build-dir custom` when running to select matching outputs. Relative output
+roots are resolved from the suite directory. Successful kernel builds record
+the produced image in `kernel-result.json` under that root. The image itself
+can be elsewhere when `KERNEL_ARGS` overrides the kernel output directory.
+The runner uses the recorded result, or an explicit `--kernel PATH`. `--output` remains
+the diagnostics directory. Explicit `--binary` and `--initramfs` overrides
+cannot be combined with `--build`.
+
 Keep readable ESP copies outside `TARGET` so cleanup does not delete boot inputs.
 
 The kernel target disables Rust compiler probing to match the selected
@@ -251,11 +277,14 @@ the run as an infrastructure failure. Format checks do not establish
 component provenance or guarantee boot compatibility.
 The selected VMM and image construction tools must also be executable.
 
-The suite uses `target/kernel-microsoft/images/bzImage-x86_64` from its own
-directory by default. Build it with `make kernel`. Use
-`--kernel PATH` to select another image, including output from a custom
-`TARGET`. Missing or empty images are infrastructure errors. The runner
-does not download or build a kernel implicitly.
+Build the selected kernel with `make kernel`. The runner uses the actual
+image recorded by that successful build, including custom kernel output
+locations. It does not infer a filename from the architecture or directory.
+This reviewed suite requires an AMD64 (`x86_64`) `bzImage`.
+Use `--kernel PATH` to select another existing image. Older builds without
+a recorded result require one `make kernel` invocation or an explicit image.
+Missing or empty images are infrastructure errors. The runner does not
+download or build a kernel implicitly.
 
 An initial nested Hyper-V boot reached the selected kernel. Guest CPUID
 `0x40000003` returned EBX `0x002bb9ff`. Preflight created a child partition
