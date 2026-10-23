@@ -27,7 +27,7 @@ initramfs: init
 mshv mshv-initramfs: initramfs
 
 kernel:
-	"$(VV_ROOT)/build-kernel" --source "$(MSHV_SOURCE)" \
+	RUSTC=false "$(VV_ROOT)/build-kernel" --source "$(MSHV_SOURCE)" \
 	  --config "$(MSHV_SOURCE)/Microsoft/configs/x86/mshv_defconfig" \
 	  --output "$(abspath $(TARGET))/kernel-microsoft" \
 	  --cache-dir "$(abspath $(TARGET))/kernel-cache" --offline --jobs "$$(nproc)"
