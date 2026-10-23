@@ -308,9 +308,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True,
                         help="New output directory containing boot.img and firmware.fd")
-    parser.add_argument("--kernel", type=Path, default=(
-        ROOT / "target/kernel-microsoft/images/bzImage-x86_64"))
-    parser.add_argument("--initramfs", type=Path, default=ROOT / "target/mshv/initramfs.cpio.gz")
+    parser.add_argument("--kernel", type=Path, help="Override the recorded kernel image")
+    parser.add_argument("--initramfs", type=Path, help="Override the suite initramfs")
+    parser.add_argument("--build-dir", type=Path,
+                        help="Suite output root containing the selected build artifacts")
     parser.add_argument("--cmdline", default=(
         "console=ttyS0,115200 rdinit=/init panic=-1 loglevel=7 "
         "no5lvl intel_iommu=off amd_iommu=off vv.run=image-probe vv.tests=ML001"))
@@ -321,6 +322,19 @@ def main():
                         help="Use installed or cached firmware without network access")
     args = parser.parse_args()
     try:
+        if args.kernel is None or args.initramfs is None:
+            from villain.appliance import load_suite
+
+            suite = load_suite(ROOT)
+            context = suite.configure_build(args.build_dir)
+            if args.kernel is None:
+                args.kernel = context.kernel_image
+                if args.kernel is None:
+                    raise RuntimeError(
+                        "No recorded kernel build result. Run make kernel "
+                        "or select an existing image with --kernel PATH.")
+            if args.initramfs is None:
+                args.initramfs = context.initramfs
         firmware = resolve_firmware(args.firmware, offline=args.offline)
         disk = build_image(args.output.resolve(), args.kernel.resolve(),
                            args.initramfs.resolve(), args.cmdline,
