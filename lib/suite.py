@@ -59,5 +59,5 @@ def create_suite():
                      protocol_prefix="MSHV", host_shutdown=True,
                      kernel=ROOT / "target/kernel-microsoft/images/bzImage-x86_64",
                      kernel_build_hint=(
-                         f"Build it with make -C {ROOT} kernel RUSTC=false, "
+                         f"Build it with make -C {ROOT} kernel, "
                          "or select another image with --kernel PATH."))
