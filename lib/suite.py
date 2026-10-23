@@ -5,8 +5,8 @@ import argparse
 import os
 from pathlib import Path
 import re
-from villain.appliance import Suite, source_catalog
-from .boot_image import build_image
+from villain.appliance import Suite, executable, source_catalog
+from .boot_image import FIRMWARE, build_image, resolve_firmware, validate_boot_inputs
 from .contract import COMMIT
 from .sources import test_sources
 
@@ -20,12 +20,22 @@ class MshvSuite(Suite):
     def add_arguments(self, parser):
         parser.epilog = (
             "MSHV_VMM selects the default Cloud Hypervisor executable. "
+            "MSHV_ESP selects readable boot components (default /boot/efi). "
+            f"Prefer installed UEFI firmware at {FIRMWARE}, otherwise download "
+            "the latest cloud-hypervisor/edk2 CLOUDHV.fd with SHA256 verification. "
+            "Boot files are checked before launching tests. "
             "Use make help in the suite directory for kernel config and build options.")
         parser.add_argument("--vmm", default=os.environ.get(
             "MSHV_VMM", str(ROOT.parent / "cloud-hypervisor/target/release/cloud-hypervisor")),
             help="Cloud Hypervisor MSHV executable")
+        parser.add_argument("--firmware", type=Path, help="Explicit local UEFI firmware")
+        parser.add_argument("--offline", action="store_true",
+                            help="Use installed or cached firmware without network access")
 
     def preflight(self, args):
+        args.firmware = resolve_firmware(args.firmware, offline=args.offline)
+        validate_boot_inputs(args.kernel, args.initramfs, firmware=args.firmware)
+        executable(args.vmm)
         fd = os.open("/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
         os.close(fd)
 
@@ -34,20 +44,23 @@ class MshvSuite(Suite):
                    f"vv.run={run_id} vv.tests={','.join(selected)}")
         return self.execution_command([
             "--vmm", args.vmm, "--kernel", str(args.kernel),
-            "--initramfs", str(args.initramfs), "--cmdline", cmdline, "--run-id", run_id])
+            "--initramfs", str(args.initramfs), "--firmware", str(args.firmware),
+            "--cmdline", cmdline, "--run-id", run_id])
 
     def execute(self, argv):
         parser = argparse.ArgumentParser(description="Boot the MSHV appliance")
         parser.add_argument("--vmm", required=True)
         parser.add_argument("--kernel", required=True, type=Path)
         parser.add_argument("--initramfs", required=True, type=Path)
+        parser.add_argument("--firmware", required=True, type=Path)
         parser.add_argument("--cmdline", required=True)
         parser.add_argument("--run-id", required=True)
         args = parser.parse_args(argv)
         if not re.fullmatch(r"[A-Za-z0-9_-]+", args.run_id):
             parser.error("Invalid run identifier")
         output = ROOT / "target/nested-hyperv/runs" / args.run_id
-        disk = build_image(output, args.kernel, args.initramfs, args.cmdline)
+        disk = build_image(output, args.kernel, args.initramfs, args.cmdline,
+                           firmware=args.firmware)
         command = [
             args.vmm, "--firmware", str(output / "firmware.fd"),
             "--disk", f"path={disk},image_type=raw,readonly=on",
