@@ -234,8 +234,9 @@ The `run-mshv` wrapper invokes this same framework runner with `--suite`
 already selected. It is shorthand, not a separate orchestration engine.
 The framework loads `lib/suite.py` from this directory. Private helpers live
 under `lib`, including the C interface in `lib/mshv.h`. Python policy helpers
-use relative imports in an isolated package, not the framework's `lib`
-package.
+use relative imports in an isolated package, not the framework's `villain`
+package. The framework supplies `villain` from its `lib/python` directory.
+No Python package installation or `PYTHONPATH` setting is required.
 For example, from this directory:
 
 ```sh
