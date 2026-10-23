@@ -7,7 +7,6 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import runpy
 import shutil
 import subprocess
 import sys
@@ -16,50 +15,47 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parent / "virtio-villain/lib/python"))
+from villain.appliance import load_suite  # noqa: E402
+
 spec = importlib.util.spec_from_file_location("mshv_boot_image", ROOT / "lib/boot_image.py")
 boot_image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(boot_image)
 
 
 class BootImageTests(unittest.TestCase):
-    def test_launcher_uses_the_private_builder_and_its_outputs(self):
-        launch = runpy.run_path(str(ROOT / "launch-nested"))["main"]
+    def test_suite_prepares_the_boot_disk_and_executes_the_selected_vmm(self):
+        suite = load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
         output = ROOT / "target/nested-hyperv/runs/launcher-test"
         arguments = [
-            "launch-nested", "--kernel", "/kernel", "--initramfs", "/archive",
+            "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
             "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test"]
-        with patch.object(sys, "argv", arguments), \
-             patch.dict(launch.__globals__["os"].environ, {"MSHV_VMM": "/vmm"}), \
-             patch.object(subprocess, "run") as build, \
-             patch.object(launch.__globals__["os"], "execv") as execute, \
+        with patch.object(module, "build_image", return_value=output / "boot.img") as build, \
+             patch.object(module.os, "execvp") as execute, \
              contextlib.redirect_stdout(io.StringIO()):
-            launch()
-        build.assert_called_once_with([
-            sys.executable, str(ROOT / "lib/boot_image.py"),
-            "--output", str(output), "--kernel", "/kernel",
-            "--initramfs", "/archive", "--cmdline", "vv.run=launcher-test",
-        ], check=True)
+            suite.execute(arguments)
+        build.assert_called_once_with(
+            output, Path("/kernel"), Path("/archive"), "vv.run=launcher-test")
         command = execute.call_args.args[1]
         self.assertEqual(execute.call_args.args[0], "/vmm")
         self.assertEqual(command[command.index("--firmware") + 1],
                          str(output / "firmware.fd"))
         self.assertEqual(command[command.index("--disk") + 1],
                          f"path={output / 'boot.img'},image_type=raw,readonly=on")
+        self.assertEqual(command[command.index("--cpus") + 1], "boot=2,nested=on")
+        self.assertEqual(command[command.index("--memory") + 1], "size=2G")
 
-    def test_launcher_does_not_start_a_vm_after_builder_failure(self):
-        launch = runpy.run_path(str(ROOT / "launch-nested"))["main"]
+    def test_suite_does_not_start_a_vm_after_builder_failure(self):
+        suite = load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
         arguments = [
-            "launch-nested", "--kernel", "/kernel", "--initramfs", "/archive",
+            "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
             "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test"]
-        errors = io.StringIO()
-        with patch.object(sys, "argv", arguments), \
-             patch.object(subprocess, "run",
-                          side_effect=subprocess.CalledProcessError(1, ["builder"])), \
-             patch.object(launch.__globals__["os"], "execv") as execute, \
-             contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as exit:
-            launch()
-        self.assertEqual(exit.exception.code, 2)
-        self.assertIn("Image construction failed", errors.getvalue())
+        with patch.object(module, "build_image", side_effect=RuntimeError("Builder failed")), \
+             patch.object(module.os, "execvp") as execute, \
+             self.assertRaisesRegex(RuntimeError, "Builder failed"):
+            suite.execute(arguments)
         execute.assert_not_called()
 
     def test_grub_chain_and_command_line(self):

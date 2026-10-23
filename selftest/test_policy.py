@@ -53,24 +53,48 @@ class PolicyTests(unittest.TestCase):
         closed.assert_called_once_with(42)
         self.assertEqual(errors.getvalue(), "")
         command = suite.build_command(args, ["ML001"], "token")
-        self.assertEqual(command[0], "/local/cloud-hypervisor")
-        self.assertEqual(command[command.index("--cpus") + 1], "boot=2,nested=on")
+        self.assertEqual(command[:3], [
+            sys.executable, str(Path(appliance.__file__).with_name("suite_exec.py")),
+            str(ROOT / "lib/suite.py")])
+        self.assertEqual(command[command.index("--vmm") + 1], "/local/cloud-hypervisor")
+        self.assertEqual(command[command.index("--run-id") + 1], "token")
         self.assertIn("vv.tests=ML001", command[command.index("--cmdline") + 1])
         self.assertIn("vv.shutdown=host", command[command.index("--cmdline") + 1])
         self.assertTrue(suite.host_shutdown)
 
-    def test_external_control_remains_available(self):
+    def test_external_control_uses_the_same_nested_environment(self):
         suite = appliance.load_suite(ROOT)
         with tempfile.TemporaryDirectory() as work:
             image = Path(work) / "image"
             image.write_bytes(b"image")
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
-                "--control", "/external/control", "--launcher", "/external/launcher"])
+                "--control", "/external/control"])
         errors = io.StringIO()
-        with patch.object(os, "open") as opened, \
+        with patch.object(os, "open", return_value=42) as opened, \
+             patch.object(os, "close") as closed, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
-        opened.assert_not_called()
+        opened.assert_called_once_with("/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
+        closed.assert_called_once_with(42)
         self.assertEqual(args.control, "/external/control")
         self.assertEqual(errors.getvalue(), "")
+
+    def test_default_nested_boot_needs_no_launcher_selection(self):
+        suite = appliance.load_suite(ROOT)
+        for override in (None, "/alternate/cloud-hypervisor"):
+            with self.subTest(override=override), \
+                 patch.dict(os.environ, {}, clear=True):
+                if override:
+                    os.environ["MSHV_VMM"] = override
+                args = appliance.parse_args(suite, ["--list"])
+                expected = override or str(
+                    ROOT.parent / "cloud-hypervisor/target/release/cloud-hypervisor")
+                self.assertEqual(args.vmm, expected)
+                self.assertFalse(hasattr(args, "launcher"))
+
+    def test_explicit_vmm_overrides_the_environment_default(self):
+        suite = appliance.load_suite(ROOT)
+        with patch.dict(os.environ, {"MSHV_VMM": "/environment/vmm"}):
+            args = appliance.parse_args(suite, ["--list", "--vmm", "cloud-hypervisor"])
+        self.assertEqual(args.vmm, "cloud-hypervisor")
