@@ -133,6 +133,45 @@ Microsoft C configuration, even when Rust is installed for VMM development.
 No extra command line setting is required. No kernel configuration options
 are silently discarded. The kernel build uses all available CPU cores.
 
+Use `make help` to list targets, config selection and build variables.
+From the framework directory, use `make -C ../virtio-villain-mshv help`.
+Execution options are listed by `./run --suite ../virtio-villain-mshv --help`
+from the framework directory.
+
+### Custom kernel configs
+
+`KERNEL_CONFIGS` is a space separated list of config files and fragments.
+An empty list uses `$(MSHV_SOURCE)/Microsoft/configs/x86/mshv_defconfig`.
+A nonempty list replaces that default. Include the Microsoft config
+explicitly when applying fragments to it. Later files override earlier values.
+Relative paths are resolved from the suite directory.
+
+For example, from the framework directory:
+
+```sh
+make -C ../virtio-villain-mshv kernel \
+  KERNEL_CONFIGS="$HOME/linux/Microsoft/configs/x86/mshv_defconfig /path/extra.config" \
+  KERNEL_ARGS="--output /path/custom-kernel --jobs 8"
+```
+
+`KERNEL_ARGS` adds builder options after the standard arguments. Any additional
+`--config` options are applied last. Use a new output directory when changing
+the source, config or toolchain. The builder rejects changed inputs in an
+existing output directory instead of silently reusing them.
+
+The selected Microsoft config uses `RUSTC=false` by default. For a compatible
+custom config requiring Rust, set `RUSTC=rustc` or another compiler command.
+Config validation remains strict.
+
+Select a custom kernel image at execution:
+
+```sh
+./run --suite ../virtio-villain-mshv \
+  --kernel /path/custom-kernel/images/bzImage-x86_64
+```
+
+### Build outputs
+
 Outputs:
 
 - `target/mshv/init`: static executable, packaged as `/init`.
