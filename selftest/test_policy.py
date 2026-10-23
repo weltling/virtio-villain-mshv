@@ -30,6 +30,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(list(entries), [
             "ML001", "ML002", "ML003", "ML004", "MR001", "MR002", "MR003"])
         self.assertTrue(all(entries.values()))
+        self.assertTrue(all(not description[0].islower() for description in entries.values()))
 
     def test_nested_execution_without_external_control(self):
         suite = appliance.load_suite(ROOT)
