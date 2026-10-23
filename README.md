@@ -263,6 +263,10 @@ Each test gets a fresh VM boot with its own console log and timeout.
 `--jobs N` limits concurrent VMs, with one as the default. For example,
 `--jobs 16` runs the seven selected cases concurrently without sharing VMs.
 `--repeat 3` runs three complete sequences of those separate boots.
+Use `--console` or `-c` for live VM output with complete logs retained.
+Console mode runs one VM at a time regardless of `--jobs`. The final summary
+is still shown, but individual host result rows and progress updates are
+suppressed.
 A guest crash or assertion failure is recorded before proceeding to the next
 test. Failed external recovery or launcher termination stops further boots.
 
