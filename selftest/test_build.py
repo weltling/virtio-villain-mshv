@@ -149,6 +149,57 @@ class BuildTests(unittest.TestCase):
                 "Later files override earlier values"):
             self.assertIn(text, result.stdout)
 
+    def test_clean_removes_the_whole_selected_output_tree(self):
+        for target in ("target", "custom output"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "lib/suite.py"
+                source.parent.mkdir()
+                source.write_text("fixture source\n")
+                subprocess.run(["git", "init", "-q", str(root)], check=True)
+                subprocess.run(["git", "-C", str(root), "add", "lib"], check=True)
+                output = root / target
+                for name in (
+                        "mshv/init", "mshv/initramfs.cpio.gz", "mshv/obj/test.o",
+                        "mshv/contract.h", "mshv/results/results.json",
+                        "kernel-microsoft/images/kernel", "kernel-cache/source",
+                        "nested-hyperv/runs/test/boot.img", "boot-components/esp/shim"):
+                    path = output / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"generated")
+                inputs = root / "boot-inputs"
+                inputs.mkdir()
+                (inputs / "shim").write_bytes(b"input")
+                for _ in range(2):
+                    result = subprocess.run([
+                        "make", "--no-print-directory", "-C", str(root),
+                        "-f", str(ROOT / "Makefile"), f"VV_ROOT={FRAMEWORK}",
+                        f"TARGET={target}", "clean",
+                    ], capture_output=True, text=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(output.exists())
+                    self.assertTrue(source.is_file())
+                    self.assertEqual((inputs / "shim").read_bytes(), b"input")
+
+    def test_clean_rejects_source_and_checkout_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "lib/suite.py"
+            source.parent.mkdir()
+            source.write_text("fixture source\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "lib"], check=True)
+            for target in ("lib", "."):
+                with self.subTest(target=target):
+                    result = subprocess.run([
+                        "make", "--no-print-directory", "-C", str(root),
+                        "-f", str(ROOT / "Makefile"), f"VV_ROOT={FRAMEWORK}",
+                        f"TARGET={target}", "clean",
+                    ], capture_output=True, text=True, timeout=20)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Refusing to clean", result.stderr)
+                    self.assertTrue(source.is_file())
+
     def test_standard_targets_and_aliases_share_one_build(self):
         for goals in (["init"], ["initramfs"],
                       ["init", "initramfs", "mshv", "mshv-initramfs"], []):
