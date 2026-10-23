@@ -128,6 +128,8 @@ names remain aliases for the complete archive build.
 The wrapper also accepts `VV_ROOT` as an environment variable. All suite and
 kernel outputs are beneath `target` in this directory, not the public repo.
 
+Keep readable ESP copies outside `TARGET` so cleanup does not delete boot inputs.
+
 The kernel target disables Rust compiler probing to match the selected
 Microsoft C configuration, even when Rust is installed for VMM development.
 No extra command line setting is required. No kernel configuration options
