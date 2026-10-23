@@ -17,6 +17,9 @@ class MshvSuite(Suite):
         return source_catalog(ROOT.glob("tests/*/*.c"), "REGISTER_MSHV_TEST")
 
     def add_arguments(self, parser):
+        parser.epilog = (
+            "MSHV_VMM selects the default Cloud Hypervisor executable. "
+            "Use make help in the suite directory for kernel config and build options.")
         parser.add_argument("--vmm", default=os.environ.get(
             "MSHV_VMM", str(ROOT.parent / "cloud-hypervisor/target/release/cloud-hypervisor")),
             help="Cloud Hypervisor MSHV executable")
