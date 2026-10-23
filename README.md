@@ -9,7 +9,9 @@ The local repository versions only source, tests, build files and documentation.
 Build outputs, generated ABI headers, kernel images and caches under `target`
 are not versioned. No remote repository is configured.
 
-The suite requires the generic appliance interfaces in `~/virtio-villain`.
+The suite requires the generic appliance interfaces in a sibling
+`virtio-villain` checkout by default. Set `VV_ROOT` to use another location
+for builds and `run-mshv`.
 The initial framework series ends at commit `eda443e`. Earlier framework
 revisions do not provide these interfaces.
 
