@@ -17,6 +17,15 @@ from villain import appliance  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
+    def test_execution_help_exposes_environment_and_build_help(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output, \
+             self.assertRaises(SystemExit) as exit:
+            appliance.main(["--suite", str(ROOT), "--help"])
+        self.assertEqual(exit.exception.code, 0)
+        text = " ".join(output.getvalue().split())
+        for expected in ("MSHV_VMM", "make help", "--kernel"):
+            self.assertIn(expected, text)
+
     def test_default_kernel_matches_the_suite_build_output(self):
         suite = appliance.load_suite(ROOT)
         expected = ROOT / "target/kernel-microsoft/images/bzImage-x86_64"
