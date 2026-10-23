@@ -32,7 +32,7 @@ static test_result_t negative(struct mshv_fixture *f)
         return TEST_FAIL;
     for (unsigned i = 0; i < 2; ++i) {
         args.count = MSHV_VP_MAX_REGISTERS + 1;
-        snprintf(operation, sizeof(operation), "%s count=129", names[i]);
+        snprintf(operation, sizeof(operation), "%s count=%u", names[i], args.count);
         if (mshv_expect_ioctl(f->vp, requests[i], &args, operation, EINVAL) != TEST_PASS ||
             mshv_roundtrip(f, 1, 0x1111222233334444ULL + i) != TEST_PASS)
             return TEST_FAIL;
@@ -42,7 +42,8 @@ static test_result_t negative(struct mshv_fixture *f)
             return TEST_FAIL;
         args.count = 1;
         args.regs = NULL;
-        snprintf(operation, sizeof(operation), "%s count=1 NULL register array", names[i]);
+        snprintf(operation, sizeof(operation), "%s count=%u NULL register array",
+                 names[i], args.count);
         if (mshv_expect_ioctl(f->vp, requests[i], &args, operation, EFAULT) != TEST_PASS ||
             mshv_roundtrip(f, 1, 0x9999aaaabbbbccccULL + i) != TEST_PASS)
             return TEST_FAIL;
