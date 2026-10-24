@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ML004 - Complete 128 lifecycles without observable resource exhaustion.
+ * ML0004 - Complete 128 lifecycles without observable resource exhaustion.
  *
  * UAPI: repeated partition creation, initialization and VP creation.
  *
@@ -28,7 +28,7 @@ static test_result_t repeated(struct mshv_fixture *f)
             return TEST_FAIL;
         if (i % 2 && mshv_close(&f->partition, "close partition before VP") != TEST_PASS)
             return TEST_FAIL;
-        uint64_t seed = i % 2 ? 0xfedcba9876543210ULL : 0x123456789abcdef0ULL;
+        uint64_t seed = i % 2 ? VV_GPR_SEED_DESCENDING : VV_GPR_SEED_LIFECYCLE;
         if (mshv_roundtrip(f, 1, seed) != TEST_PASS)
             return TEST_FAIL;
         if (mshv_cleanup(f) != TEST_PASS)
@@ -37,4 +37,4 @@ static test_result_t repeated(struct mshv_fixture *f)
     return TEST_PASS;
 }
 
-REGISTER_MSHV_TEST(ML004, repeated, "128 lifecycle cycles alternating parent closure orders");
+REGISTER_MSHV_TEST(ML0004, repeated, "128 lifecycle cycles alternating parent closure orders");

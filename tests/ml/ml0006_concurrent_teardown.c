@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ML006 - Partition teardown concurrent with another partition's VP access.
+ * ML0006 - Partition teardown concurrent with another partition's VP access.
  *
  * Keep partition B and its VP zero alive in the main thread. A worker thread
  * runs 64 lifecycles of partition A, each also using VP zero. Each A cycle
@@ -132,5 +132,5 @@ stop:
     return mshv_roundtrip(b, CONCURRENT_REGISTERS, seed ^ VV_GPR_LOW32_MASK);
 }
 
-REGISTER_MSHV_TEST(ML006, concurrent_teardown,
+REGISTER_MSHV_TEST(ML0006, concurrent_teardown,
                    "Partition teardown concurrent with another partition's VP access");

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ML005 - Independent partition state survives teardown and recreation.
+ * ML0005 - Independent partition state survives teardown and recreation.
  *
  * Keep partition B and its VP zero alive across 32 lifecycles of partition A,
  * each also using VP zero. Write distinct RAX/RCX/RDX/RBX patterns and check
@@ -69,5 +69,5 @@ out:
     return result;
 }
 
-REGISTER_MSHV_TEST(ML005, partition_isolation,
+REGISTER_MSHV_TEST(ML0005, partition_isolation,
                    "Independent partition state across 32 alternating teardown cycles");

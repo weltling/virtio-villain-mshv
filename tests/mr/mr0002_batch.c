@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * MR002 - Exact batches of general purpose registers (GPRs).
+ * MR0002 - Exact batches of general purpose registers (GPRs).
  *
  * UAPI: MSHV_SET_VP_REGISTERS and MSHV_GET_VP_REGISTERS.
  *
@@ -16,9 +16,9 @@ static test_result_t batch(struct mshv_fixture *f)
 {
     if (mshv_create(f) != TEST_PASS)
         return TEST_FAIL;
-    if (mshv_roundtrip(f, 4, 0x0123456789abcdefULL) != TEST_PASS)
+    if (mshv_roundtrip(f, 4, VV_GPR_SEED_ASCENDING) != TEST_PASS)
         return TEST_FAIL;
-    return mshv_roundtrip(f, 4, 0xfedcba9876543210ULL);
+    return mshv_roundtrip(f, 4, VV_GPR_SEED_DESCENDING);
 }
 
-REGISTER_MSHV_TEST(MR002, batch, "Four-register GPR batches with distinct exact values");
+REGISTER_MSHV_TEST(MR0002, batch, "Four-register GPR batches with distinct exact values");

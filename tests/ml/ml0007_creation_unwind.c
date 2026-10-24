@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ML007 - Recover from late partition and VP descriptor allocation failures.
+ * ML0007 - Recover from late partition and VP descriptor allocation failures.
  *
  * The selected driver's creation paths allocate hypervisor resources before
  * get_unused_fd_flags(). Temporarily setting the process soft RLIMIT_NOFILE
@@ -124,5 +124,5 @@ out:
     return result;
 }
 
-REGISTER_MSHV_TEST(ML007, creation_unwind,
+REGISTER_MSHV_TEST(ML0007, creation_unwind,
                    "Partition and VP recovery after repeated late descriptor allocation failures");

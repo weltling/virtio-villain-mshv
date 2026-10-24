@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * MR003 - Exact register errors followed by valid operations.
+ * MR0003 - Exact register errors followed by valid operations.
  *
  * UAPI: MSHV_GET_VP_REGISTERS and MSHV_SET_VP_REGISTERS validation errors.
  *
@@ -34,18 +34,18 @@ static test_result_t negative(struct mshv_fixture *f)
         args.count = MSHV_VP_MAX_REGISTERS + 1;
         snprintf(operation, sizeof(operation), "%s count=%u", names[i], args.count);
         if (mshv_expect_ioctl(f->vp, requests[i], &args, operation, EINVAL) != TEST_PASS ||
-            mshv_roundtrip(f, 1, 0x1111222233334444ULL + i) != TEST_PASS)
+            mshv_roundtrip(f, 1, VV_GPR_SEED_INVALID_COUNT + i) != TEST_PASS)
             return TEST_FAIL;
         snprintf(operation, sizeof(operation), "%s NULL ioctl argument", names[i]);
         if (mshv_expect_ioctl(f->vp, requests[i], NULL, operation, EFAULT) != TEST_PASS ||
-            mshv_roundtrip(f, 1, 0x5555666677778888ULL + i) != TEST_PASS)
+            mshv_roundtrip(f, 1, VV_GPR_SEED_NULL_ARGUMENT + i) != TEST_PASS)
             return TEST_FAIL;
         args.count = 1;
         args.regs = NULL;
         snprintf(operation, sizeof(operation), "%s count=%u NULL register array",
                  names[i], args.count);
         if (mshv_expect_ioctl(f->vp, requests[i], &args, operation, EFAULT) != TEST_PASS ||
-            mshv_roundtrip(f, 1, 0x9999aaaabbbbccccULL + i) != TEST_PASS)
+            mshv_roundtrip(f, 1, VV_GPR_SEED_NULL_REGISTERS + i) != TEST_PASS)
             return TEST_FAIL;
         args.regs = &reg;
     }
@@ -55,10 +55,10 @@ static test_result_t negative(struct mshv_fixture *f)
         snprintf(operation, sizeof(operation), "SET forbidden suspend register 0x%x", reg.name);
         if (mshv_expect_ioctl(f->vp, MSHV_SET_VP_REGISTERS, &args,
                               operation, EINVAL) != TEST_PASS ||
-            mshv_roundtrip(f, 1, 0xdeadbeef12345678ULL + i) != TEST_PASS)
+            mshv_roundtrip(f, 1, VV_GPR_SEED_FORBIDDEN_REGISTER + i) != TEST_PASS)
             return TEST_FAIL;
     }
     return TEST_PASS;
 }
 
-REGISTER_MSHV_TEST(MR003, negative, "Exact EINVAL/EFAULT checks, each followed by a valid roundtrip");
+REGISTER_MSHV_TEST(MR0003, negative, "Exact EINVAL/EFAULT checks, each followed by a valid roundtrip");
