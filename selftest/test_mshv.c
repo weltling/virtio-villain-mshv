@@ -24,6 +24,7 @@ static pthread_mutex_t mock_lock = PTHREAD_MUTEX_INITIALIZER;
 static int fd_flags = FD_CLOEXEC;
 static struct mock_partition {
     int references;
+    int initialized;
     int broken;
     int vp_created[2];
     uint64_t values[2][4];
@@ -136,75 +137,225 @@ static int reject(int error)
     return -1;
 }
 
+static int is_device_request(unsigned long req)
+{
+    return req == MSHV_CREATE_PARTITION || req == MSHV_ROOT_HVCALL;
+}
+
+static int is_vp_request(unsigned long req)
+{
+    switch (req) {
+    case MSHV_RUN_VP:
+    case MSHV_GET_VP_STATE:
+    case MSHV_SET_VP_STATE:
+    case MSHV_TRANSLATE_GVA:
+    case MSHV_GET_VP_REGISTERS:
+    case MSHV_SET_VP_REGISTERS:
+    case MSHV_VP_REGISTER_INTERCEPT_RESULT:
+    case MSHV_GET_VP_CPUID_VALUES:
+    case MSHV_READ_GPA:
+    case MSHV_WRITE_GPA:
+    case MSHV_ROOT_HVCALL:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int is_snp_partition_request(unsigned long req)
+{
+    switch (req) {
+    case MSHV_MODIFY_GPA_HOST_ACCESS:
+    case MSHV_IMPORT_ISOLATED_PAGES:
+    case MSHV_COMPLETE_ISOLATED_IMPORT:
+    case MSHV_ISSUE_PSP_GUEST_REQUEST:
+    case MSHV_SEV_SNP_AP_CREATE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int is_partition_request(unsigned long req)
+{
+    if (is_snp_partition_request(req))
+        return 1;
+    switch (req) {
+    case MSHV_INITIALIZE_PARTITION:
+    case MSHV_CREATE_VP:
+    case MSHV_SET_GUEST_MEMORY:
+    case MSHV_IRQFD:
+    case MSHV_IOEVENTFD:
+    case MSHV_SET_MSI_ROUTING:
+    case MSHV_GET_GPAP_ACCESS_BITMAP:
+    case MSHV_CREATE_DEVICE:
+    case MSHV_GET_GPAP_RANGE_ACCESS:
+    case MSHV_SCRUB_PARTITION:
+    case MSHV_INSTALL_INTERCEPT:
+    case MSHV_ASSERT_INTERRUPT:
+    case MSHV_SET_PARTITION_PROPERTY:
+    case MSHV_GET_PARTITION_PROPERTY:
+    case MSHV_SIGNAL_EVENT_DIRECT:
+    case MSHV_POST_MESSAGE_DIRECT:
+    case MSHV_REGISTER_DELIVERABILITY_NOTIFICATIONS:
+    case MSHV_ROOT_HVCALL:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int mock_ioctl(int fd, unsigned long request, void *arg)
 {
-    assert(types[fd]);
+    if (fd < 0 || fd >= (int)(sizeof(types) / sizeof(types[0])) || !types[fd])
+        return reject(EBADF);
     if (++calls == fail_at)
         return reject(EIO);
     if (types[fd] != 1 && partitions[owners[fd]].broken)
         return reject(EIO);
-    if (types[fd] == 1 && request == MSHV_CREATE_PARTITION) {
-        struct mshv_create_partition *args = arg;
-        assert(args && args->pt_flags == VV_MSHV_PARTITION_FLAGS_NONE &&
-               args->pt_isolation == MSHV_PT_ISOLATION_NONE);
-        if (mock_limit.rlim_cur == 0 && unexpected_creation != 1) {
-            ++partition_rejections;
-            if (damage_unwind == 1)
-                partitions[0].values[0][0] ^= 1;
-            return reject(EMFILE);
+
+    if (types[fd] == 1) {
+        if (!is_device_request(request))
+            return reject(ENOTTY);
+        if (request == MSHV_CREATE_PARTITION) {
+            struct mshv_create_partition *args = arg;
+            if (!args)
+                return reject(EFAULT);
+            if ((args->pt_flags & ~MSHV_PT_FLAGS_MASK) ||
+                args->pt_isolation >= MSHV_PT_ISOLATION_COUNT)
+                return reject(EINVAL);
+            if (mock_limit.rlim_cur == 0 && unexpected_creation != 1) {
+                ++partition_rejections;
+                if (damage_unwind == 1)
+                    partitions[0].values[0][0] ^= 1;
+                return reject(EMFILE);
+            }
+            unsigned owner = 0;
+            while (owner < sizeof(partitions) / sizeof(partitions[0]) &&
+                   partitions[owner].references)
+                ++owner;
+            assert(owner < sizeof(partitions) / sizeof(partitions[0]));
+            partitions[owner].references = 1;
+            partitions[owner].initialized = 0;
+            ++references;
+            return allocate(2, 0, owner);
         }
-        unsigned owner = 0;
-        while (owner < sizeof(partitions) / sizeof(partitions[0]) &&
-               partitions[owner].references)
-            ++owner;
-        assert(owner < sizeof(partitions) / sizeof(partitions[0]));
-        partitions[owner].references = 1;
-        ++references;
-        return allocate(2, 0, owner);
+        if (request == MSHV_ROOT_HVCALL) {
+            if (!arg)
+                return reject(EFAULT);
+            return 0;
+        }
+        return reject(ENOTTY);
     }
-    if (types[fd] == 2 && request == MSHV_INITIALIZE_PARTITION)
+
+    if (types[fd] == 2) {
+        if (!is_partition_request(request))
+            return reject(ENOTTY);
+        if (is_snp_partition_request(request))
+            return reject(EOPNOTSUPP);
+        if (request == MSHV_INITIALIZE_PARTITION) {
+            partitions[owners[fd]].initialized = 1;
+            return 0;
+        }
+        if (request == MSHV_CREATE_VP) {
+            struct mshv_create_vp *args = arg;
+            if (!args)
+                return reject(EFAULT);
+            if (!partitions[owners[fd]].initialized)
+                return reject(EIO);
+            if (args->vp_index >= 256)
+                return reject(EINVAL);
+            struct mock_partition *partition = &partitions[owners[fd]];
+            assert(args->vp_index < 2);
+            if (partition->vp_created[args->vp_index])
+                return reject(EEXIST);
+            if (mock_limit.rlim_cur == 0 && unexpected_creation != 2) {
+                ++vp_rejections;
+                if (damage_unwind == 2)
+                    partitions[0].values[0][0] ^= 1;
+                if (retain_failed_vp)
+                    partition->vp_created[args->vp_index] = 1;
+                return reject(EMFILE);
+            }
+            partition->vp_created[args->vp_index] = 1;
+            ++partition->references;
+            ++references;
+            return allocate(3, args->vp_index, owners[fd]);
+        }
+        if (request == MSHV_SET_GUEST_MEMORY) {
+            if (!arg)
+                return reject(EFAULT);
+            struct mshv_user_mem_region *m = arg;
+            if (!m->size || (m->size % 4096) || (m->userspace_addr % 4096) || (m->flags & ~0x07))
+                return reject(EINVAL);
+            return 0;
+        }
+        if (request == MSHV_IRQFD) {
+            if (!arg)
+                return reject(EFAULT);
+            struct mshv_user_irqfd *irq = arg;
+            if (irq->flags & ~0x03)
+                return reject(EINVAL);
+            if (irq->fd < 0)
+                return reject(EBADF);
+            return 0;
+        }
+        if (request == MSHV_IOEVENTFD) {
+            if (!arg)
+                return reject(EFAULT);
+            struct mshv_user_ioeventfd *io = arg;
+            if (io->flags & ~0x07)
+                return reject(EINVAL);
+            if (io->len != 1 && io->len != 2 && io->len != 4 && io->len != 8)
+                return reject(EINVAL);
+            return 0;
+        }
+        if (!arg && request != MSHV_SCRUB_PARTITION)
+            return reject(EFAULT);
         return 0;
-    if (types[fd] == 2 && request == MSHV_CREATE_VP) {
-        struct mshv_create_vp *args = arg;
-        struct mock_partition *partition = &partitions[owners[fd]];
-        assert(args && args->vp_index < 2);
-        if (partition->vp_created[args->vp_index])
-            return reject(EEXIST);
-        if (mock_limit.rlim_cur == 0 && unexpected_creation != 2) {
-            ++vp_rejections;
-            if (damage_unwind == 2)
-                partitions[0].values[0][0] ^= 1;
-            if (retain_failed_vp)
-                partition->vp_created[args->vp_index] = 1;
-            return reject(EMFILE);
-        }
-        partition->vp_created[args->vp_index] = 1;
-        ++partition->references;
-        ++references;
-        return allocate(3, args->vp_index, owners[fd]);
     }
+
     assert(types[fd] == 3);
-    assert(request == MSHV_GET_VP_REGISTERS || request == MSHV_SET_VP_REGISTERS);
-    struct mshv_vp_registers *args = arg;
-    if (!args)
-        return reject(EFAULT);
-    if (args->count > MSHV_VP_MAX_REGISTERS)
-        return reject(EINVAL);
-    if (!args->regs)
-        return reject(EFAULT);
-    struct mock_partition *partition = &partitions[shared_registers ? 0 : owners[fd]];
-    for (unsigned i = 0; i < args->count; ++i) {
-        struct hv_register_assoc *reg = &args->regs[i];
-        if (request == MSHV_SET_VP_REGISTERS &&
-            (reg->name == VV_EXPLICIT_SUSPEND || reg->name == VV_INTERCEPT_SUSPEND))
+    if (!is_vp_request(request))
+        return reject(ENOTTY);
+    if (request == MSHV_GET_VP_STATE || request == MSHV_SET_VP_STATE) {
+        if (!arg)
+            return reject(EFAULT);
+        struct mshv_get_set_vp_state *s = arg;
+        if (s->type >= 5 || !s->buf_sz || (s->buf_sz % 4096) || (s->buf_ptr % 4096))
             return reject(EINVAL);
-        assert(reg->name >= VV_RAX && reg->name <= VV_RBX);
-        unsigned n = reg->name - VV_RAX;
-        if (request == MSHV_SET_VP_REGISTERS)
-            partition->values[indices[fd]][n] = reg->value.reg64;
-        else
-            reg->value.reg64 = partition->values[indices[fd]][n] ^ corrupt_read;
+        return 0;
     }
+    if (request == MSHV_GET_VP_CPUID_VALUES) {
+        if (!arg)
+            return reject(EFAULT);
+        return 0;
+    }
+    if (request == MSHV_GET_VP_REGISTERS || request == MSHV_SET_VP_REGISTERS) {
+        struct mshv_vp_registers *args = arg;
+        if (!args)
+            return reject(EFAULT);
+        if (args->count > MSHV_VP_MAX_REGISTERS)
+            return reject(EINVAL);
+        if (!args->regs)
+            return reject(EFAULT);
+        struct mock_partition *partition = &partitions[shared_registers ? 0 : owners[fd]];
+        for (unsigned i = 0; i < args->count; ++i) {
+            struct hv_register_assoc *reg = &args->regs[i];
+            if (request == MSHV_SET_VP_REGISTERS &&
+                (reg->name == VV_EXPLICIT_SUSPEND || reg->name == VV_INTERCEPT_SUSPEND))
+                return reject(EINVAL);
+            assert(reg->name >= VV_RAX && reg->name <= VV_RBX);
+            unsigned n = reg->name - VV_RAX;
+            if (request == MSHV_SET_VP_REGISTERS)
+                partition->values[indices[fd]][n] = reg->value.reg64;
+            else
+                reg->value.reg64 = partition->values[indices[fd]][n] ^ corrupt_read;
+        }
+        return 0;
+    }
+    if (!arg && request != MSHV_RUN_VP)
+        return reject(EFAULT);
     return 0;
 }
 
@@ -282,6 +433,44 @@ static test_result_t execute(const struct vv_test_entry *test)
     return result;
 }
 
+static void check_ioctl_table(void)
+{
+    assert(mshv_ioctl_count == 34);
+    unsigned routing_checks = 0, pointer_checks = 0;
+    for (size_t i = 0; i < mshv_ioctl_count; ++i) {
+        const struct mshv_ioctl_entry *entry = &mshv_ioctl_table[i];
+        unsigned targets = 0;
+        if (is_device_request(entry->request))
+            targets |= VV_IOCTL_DEVICE;
+        if (is_partition_request(entry->request))
+            targets |= VV_IOCTL_PARTITION;
+        if (is_vp_request(entry->request))
+            targets |= VV_IOCTL_VP;
+        assert(targets && entry->targets == targets);
+        assert(_IOC_TYPE(entry->request) == MSHV_IOCTL);
+        assert(!strncmp(entry->name, "MSHV_", 5));
+        for (size_t j = 0; j < i; ++j) {
+            assert(entry->request != mshv_ioctl_table[j].request);
+            assert(strcmp(entry->name, mshv_ioctl_table[j].name));
+        }
+        int expected = EFAULT;
+        if (is_snp_partition_request(entry->request))
+            expected = EOPNOTSUPP;
+        if (entry->request == MSHV_INITIALIZE_PARTITION ||
+            entry->request == MSHV_SCRUB_PARTITION || entry->request == MSHV_RUN_VP)
+            expected = 0;
+        assert(entry->null_errno == expected);
+        const unsigned all_targets[] = {VV_IOCTL_DEVICE, VV_IOCTL_PARTITION, VV_IOCTL_VP};
+        for (size_t j = 0; j < sizeof(all_targets) / sizeof(all_targets[0]); ++j) {
+            if (!(targets & all_targets[j]))
+                ++routing_checks;
+            else if (entry->null_errno)
+                ++pointer_checks;
+        }
+    }
+    assert(routing_checks == 66 && pointer_checks == 33);
+}
+
 static void check_preflight(void)
 {
     int previous_calls = calls;
@@ -318,6 +507,7 @@ static void check_preflight(void)
 
 int main(void)
 {
+    check_ioctl_table();
     uint32_t signature = VV_HYPERV_INTERFACE_HV1_SIGNATURE;
     assert(!memcmp(&signature, "Hv#1", sizeof(signature)));
     assert(HYPERV_HYPERVISOR_PRESENT_BIT == UINT32_C(0x80000000));
@@ -352,26 +542,30 @@ int main(void)
     for (const struct vv_test_entry *test = __start_mshv_registry;
          test < __stop_mshv_registry; ++test) {
         assert(execute(test) == TEST_PASS);
-        if (!strcmp(test->name, "ML001"))
+        if (!strcmp(test->name, "ML0001"))
             lifecycle = test;
-        if (!strcmp(test->name, "MR001"))
+        if (!strcmp(test->name, "MR0001"))
             single = test;
-        if (!strcmp(test->name, "MR003"))
+        if (!strcmp(test->name, "MR0003"))
             negative = test;
-        if (!strcmp(test->name, "ML005")) {
+        if (!strcmp(test->name, "ML0008"))
+            assert(calls == 3 + 66 + 2);
+        if (!strcmp(test->name, "ML0010"))
+            assert(calls == 3 + 33 + 2);
+        if (!strcmp(test->name, "ML0005")) {
             isolation = test;
             isolation_calls = calls;
             isolation_opens = opens;
             isolation_closes = closes;
             isolation_fds = fd_checks;
         }
-        if (!strcmp(test->name, "ML006")) {
+        if (!strcmp(test->name, "ML0006")) {
             concurrent = test;
             concurrent_opens = opens;
             concurrent_closes = closes;
             concurrent_fds = fd_checks;
         }
-        if (!strcmp(test->name, "ML007")) {
+        if (!strcmp(test->name, "ML0007")) {
             unwind = test;
             unwind_calls = calls;
             unwind_opens = opens;
