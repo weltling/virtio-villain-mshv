@@ -21,7 +21,7 @@ def kernel(context):
     source = kernel_source(context)
     configs = shlex.split(context.variables.get("KERNEL_CONFIGS", ""))
     if not configs:
-        raise RuntimeError("Set KERNEL_CONFIGS to the kernel configuration files")
+        configs = [str(source / "Microsoft/configs/x86/mshv_defconfig")]
     command = ["--source", source, "--arch", KERNEL_ARCH]
     for config in configs:
         command.extend(["--config", config])

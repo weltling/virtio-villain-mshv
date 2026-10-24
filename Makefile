@@ -23,7 +23,7 @@ selftest:
 	python3 -m unittest discover -s selftest -p 'test_*.py'
 
 lint:
-	python3 -m flake8 run-mshv lib selftest
+	python3 -m flake8 run lib selftest
 
 help:
 	@echo "Targets:"
@@ -42,7 +42,9 @@ help:
 	@echo "  TARGET              Output directory (default: target)"
 	@echo "  CC, CFLAGS, LDFLAGS  C compiler and build flags"
 	@echo "  V=1                 Print compiler commands in framework and kernel builds"
-	@echo "  KERNEL_CONFIGS      Required ordered config files or fragments"
+	@echo "  KERNEL_CONFIGS      Optional ordered config files or fragments"
+	@echo "                      Default: MSHV_SOURCE/Microsoft/configs/x86/mshv_defconfig"
+	@echo "                      A nonempty list replaces the default config"
 	@echo "                      Later files override earlier values"
 	@echo "  KERNEL_ARGS         Extra build-kernel options, processed after KERNEL_CONFIGS"
 	@echo "                      Use --output DIR for a different config or toolchain"
@@ -52,12 +54,13 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo '  make -j init initramfs'
+	@echo '  make kernel MSHV_SOURCE=/path/linux'
 	@echo '  make kernel MSHV_SOURCE=/path/linux KERNEL_CONFIGS="/path/base.config /path/extra.config" KERNEL_ARGS="--output /path/custom-kernel"'
 	@echo '  $(VV_ROOT)/build-kernel --help lists all generic kernel build options'
 	@echo ""
 	@echo "Relative paths are resolved from this suite directory."
 	@echo "clean also removes cached boot components, kernel caches and saved results in TARGET."
 	@echo "Keep reusable boot inputs outside TARGET and select them with MSHV_ESP."
-	@echo "Use the framework run --suite PATH --help for execution options."
+	@echo "Use ./run --help for execution options."
 
 .PHONY: init initramfs mshv mshv-initramfs kernel clean selftest lint help

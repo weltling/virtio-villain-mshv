@@ -11,7 +11,7 @@ are not versioned. No remote repository is configured.
 
 The suite requires the generic appliance interfaces in a sibling
 `virtio-villain` checkout by default. Set `VV_ROOT` to use another location
-for builds and `run-mshv`.
+for builds and `./run`.
 The initial framework series ends at commit `eda443e`. Earlier framework
 revisions do not provide these interfaces.
 
@@ -19,23 +19,32 @@ Virtio Villain builds the appliance and supplies guest registration,
 assertions and test execution. Its host runner owns selection, supervision
 and reporting. This repository supplies the MSHV cases and launch policy.
 
-## Selected contract
+## Test ABI and kernel selection
 
-- Full source: `~/linux`.
-- Branch inspected: `feature/linux-mshv/6.18`.
-- Commit: `d461acfb591c198755f6e84494f8a68a3b6d8bd2`.
-- Configuration: `Microsoft/configs/x86/mshv_defconfig` from that source.
-- Architecture: x86-64, child partitions without isolation, VP index 0 initially.
+The suite can test arbitrary Linux source revisions, including locally modified
+trees and source archives without Git metadata. There is no commit or clean
+tree requirement. Select a kernel tree with `MSHV_SOURCE` when building a kernel,
+or use `--kernel PATH` to test an existing image.
 
-The ABI generator requires this exact commit with no tracked source changes.
-It extracts the tested structures and IOCTL definitions from
-`include/uapi/linux/mshv.h`, not the headers installed on the host. Register
-association layout follows `include/hyperv/hvgdk_mini.h`. The packed
+Building the test executable and initramfs does not require a kernel checkout.
+The suite uses stable userspace ABI definitions rather than extracting them
+from the kernel under test or using headers installed on the host. This keeps
+kernel changes from changing the requests and expectations being tested.
+Missing interfaces or unsupported behavior are reported by preflight checks
+or test failures, not rejected based on a kernel revision.
+
+The suite currently targets x86-64 Hyper-V parent partitions and child
+partitions without isolation, with VP index 0 initially.
+Kernel builds require an explicit source directory in `MSHV_SOURCE`.
+They use the selected tree's MSHV platform config by default;
+`KERNEL_CONFIGS` overrides it. No source checkout location is assumed.
+
+Register association layout follows the Hyper-V TLFS. The packed
 association is 32 bytes with a 16 byte value at offset 16. Reserved fields
 are zero. General purpose
 register identifiers follow the Hyper-V TLFS x64 register namespace.
 
-`drivers/hv/mshv_root_main.c` establishes:
+The tested lifecycle behavior is:
 
 - Create partition returns an `FD_CLOEXEC` descriptor but does not initialize
   the partition. Call `MSHV_INITIALIZE_PARTITION` before creating the VP.
@@ -49,8 +58,12 @@ register identifiers follow the Hyper-V TLFS x64 register namespace.
   NULL request pointers and NULL arrays with nonzero count return `EFAULT`.
   SET of explicit/intercept suspend registers returns `EINVAL`.
 
-The compatibility IOCTLs are deprecated but remain implemented in this exact
-contract. Their unexpected absence is a failed assertion, not an optional skip.
+The suite exercises deprecated compatibility IOCTLs as well as newer
+interfaces. Their absence is a failed assertion, not an optional skip.
+Selecting a different kernel does not change these expectations.
+
+The result protocol identifies the test ABI as `mshv-uapi-v1`, not a kernel
+commit. Run reports record the selected kernel image and its SHA256.
 
 Only RAX, RCX, RDX and RBX are written. Their complete 64-bit values are compared,
 including all ones and values with high bits set. They have no architectural reserved
@@ -113,12 +126,13 @@ binutils, Python 3, flex, bison, bc, elfutils-libelf-devel, openssl-devel,
 zlib-devel and dwarves. Flake8 is required for lint. Rust/Cargo are useful
 for rebuilding VMMs but are not needed to compile the C test executable.
 
+From the suite directory:
+
 ```sh
-cd ~/virtio-villain-mshv
 make -j init initramfs
-make kernel
+make kernel MSHV_SOURCE=/path/linux
 make selftest lint
-./run-mshv --list
+./run --list
 ```
 
 `init` builds the test executable. `initramfs` builds and packages it.
@@ -127,6 +141,7 @@ The default target is `initramfs`. The existing `mshv` and `mshv-initramfs`
 names remain aliases for the complete archive build.
 
 `VV_ROOT`/`MSHV_SOURCE` Make variables select alternate framework/source trees.
+`MSHV_SOURCE` applies to kernel builds only.
 The wrapper also accepts `VV_ROOT` as an environment variable. All suite and
 kernel outputs are beneath `target` in this directory, not the public repo.
 
@@ -134,14 +149,15 @@ The same build targets work from the framework directory:
 
 ```sh
 make SUITE=../virtio-villain-mshv initramfs
-make SUITE=../virtio-villain-mshv kernel
+make SUITE=../virtio-villain-mshv kernel \
+  MSHV_SOURCE=/path/linux
 ```
 
-Both directions use the private suite build definition. Contract generation,
-source selection and kernel policy remain in this repository.
+Both directions use the private suite build definition. Source selection and
+kernel policy remain in this repository.
 The suite Makefile also retains its existing targets and aliases.
 
-Use `./run-mshv --build ML001` to build the executable and initramfs before
+Use `./run --build ML001` to build the executable and initramfs before
 running a test. The equivalent framework command is
 `./run --suite ../virtio-villain-mshv --build ML001`.
 This does not build a kernel. Without `--build`, execution never builds
@@ -158,8 +174,8 @@ cannot be combined with `--build`.
 
 Keep readable ESP copies outside `TARGET` so cleanup does not delete boot inputs.
 
-The kernel target disables Rust compiler probing to match the selected
-Microsoft C configuration, even when Rust is installed for VMM development.
+The kernel target disables Rust compiler probing by default for C
+configurations, even when Rust is installed for VMM development.
 No extra command line setting is required. No kernel configuration options
 are silently discarded. The kernel build uses all available CPU cores.
 
@@ -170,17 +186,20 @@ from the framework directory.
 
 ### Custom kernel configs
 
-`KERNEL_CONFIGS` is a space separated list of config files and fragments.
-An empty list uses `$(MSHV_SOURCE)/Microsoft/configs/x86/mshv_defconfig`.
-A nonempty list replaces that default. Include the Microsoft config
-explicitly when applying fragments to it. Later files override earlier values.
+For the supported x86-64 platform, the default config is
+`Microsoft/configs/x86/mshv_defconfig` under `MSHV_SOURCE`.
+A nonempty `KERNEL_CONFIGS` is a space separated list of config files and
+fragments that replaces this default. Supply a base configuration suitable
+for the selected source if it does not include the default config.
+Later files override earlier values.
 Relative paths are resolved from the suite directory.
 
 For example, from the framework directory:
 
 ```sh
 make -C ../virtio-villain-mshv kernel \
-  KERNEL_CONFIGS="$HOME/linux/Microsoft/configs/x86/mshv_defconfig /path/extra.config" \
+  MSHV_SOURCE=/path/linux \
+  KERNEL_CONFIGS="/path/base.config /path/extra.config" \
   KERNEL_ARGS="--output /path/custom-kernel --jobs 8"
 ```
 
@@ -189,8 +208,8 @@ make -C ../virtio-villain-mshv kernel \
 the source, config or toolchain. The builder rejects changed inputs in an
 existing output directory instead of silently reusing them.
 
-The selected Microsoft config uses `RUSTC=false` by default. For a compatible
-custom config requiring Rust, set `RUSTC=rustc` or another compiler command.
+Kernel builds use `RUSTC=false` by default. For a compatible configuration
+requiring Rust, set `RUSTC=rustc` or another compiler command.
 Config validation remains strict.
 
 Select a custom kernel image at execution:
@@ -206,8 +225,8 @@ Outputs:
 
 - `target/mshv/init`: static executable, packaged as `/init`.
 - `target/mshv/initramfs.cpio.gz`: separate reproducible archive.
-- `target/kernel-microsoft/images/vmlinux-x86_64`: Cloud Hypervisor ELF image.
-- `target/kernel-microsoft/images/bzImage-x86_64`: compressed Linux image.
+- `target/kernel/images/vmlinux-x86_64`: Cloud Hypervisor ELF image.
+- `target/kernel/images/bzImage-x86_64`: compressed Linux image.
 - Adjacent config, hashes and generic kernel builder provenance metadata.
 
 ## Run
@@ -242,8 +261,8 @@ Use `--firmware PATH` to select a local file without downloading.
 Use `--offline` to forbid network access and reuse installed firmware or
 the last verified cached release. The cache is under
 `$XDG_CACHE_HOME/virtio-villain/firmware`, defaulting to
-`~/.cache/virtio-villain/firmware`. Online fallback checks for the latest
-release even when a previous release is cached. Download failures do not
+the user's `.cache/virtio-villain/firmware` directory. Online fallback checks
+for the latest release even when a previous release is cached. Download failures do not
 silently select an older version. New upstream firmware still requires
 boot validation in the supported environment.
 
@@ -257,17 +276,16 @@ shim, GRUB, Hyper-V and then the selected kernel with the test initramfs.
 The GRUB entry follows the installed host sequence without copying its
 root device identifiers or enabling AMD confidential guest options.
 
-Run the suite through the same shared framework:
+Run the suite from its directory through the shared framework:
 
 ```sh
-~/virtio-villain/run \
-  --suite ~/virtio-villain-mshv \
+./run \
   --timeout 120 --jobs 16
 ```
 
 The suite selects the nested boot environment automatically. It uses the
-neighboring Cloud Hypervisor build with `nested=on`. Use `--vmm PATH` or set
-`MSHV_VMM` to select another Cloud Hypervisor binary. This boot path requires
+`cloud-hypervisor` command from `PATH` with `nested=on`. Use `--vmm PATH` or set
+`MSHV_VMM` to select a Cloud Hypervisor binary explicitly. This boot path requires
 `bzImage`, not an ELF `vmlinux` image.
 
 Before launching tests, preflight checks that all boot inputs are readable
@@ -277,7 +295,8 @@ the run as an infrastructure failure. Format checks do not establish
 component provenance or guarantee boot compatibility.
 The selected VMM and image construction tools must also be executable.
 
-Build the selected kernel with `make kernel`. The runner uses the actual
+Build the selected kernel with `make kernel MSHV_SOURCE=PATH KERNEL_CONFIGS=PATH`.
+The runner uses the actual
 image recorded by that successful build, including custom kernel output
 locations. It does not infer a filename from the architecture or directory.
 This reviewed suite requires an AMD64 (`x86_64`) `bzImage`.
@@ -300,7 +319,7 @@ path. This tests UAPI operation, not the kernel poweroff implementation.
 All seven lifecycle and register tests passed in separate nested Hyper-V
 boots on 2026-10-22 using this shutdown mode. Each guest completed its
 result protocol and stop handshake without a kernel panic. The tested
-kernel contract is commit `d461acfb591c198755f6e84494f8a68a3b6d8bd2`.
+kernel was built from commit `d461acfb591c198755f6e84494f8a68a3b6d8bd2`.
 Repeated full suite runs remain outstanding.
 
 ### Recovery and execution options
@@ -311,22 +330,21 @@ recover a hung outer host.
 
 External watchdog and recovery design remains separate work. When available,
 select a real external control with `--control EXECUTABLE`. The interface is
-documented in `~/virtio-villain/docs/suites.md`. It uses `arm`, `recover`
+documented in the framework's `docs/suites.md`. It uses `arm`, `recover`
 and `disarm` with a run identifier, plus an arm deadline. The watchdog must
 survive a hang of the outer Linux host.
 
 ```sh
-~/virtio-villain/run \
-  --suite ~/virtio-villain-mshv \
-  --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
+./run \
+  --vmm /path/cloud-hypervisor \
   --timeout 180 --repeat 3 ML001 MR001 MR003
 ```
 
 No external control is supplied by this repository. Do not substitute a
 script that only kills the launcher or reports success without arming recovery.
 
-The `run-mshv` wrapper invokes this same framework runner with `--suite`
-already selected. It is shorthand, not a separate orchestration engine.
+The `./run` wrapper in this directory invokes the framework runner with
+`--suite` already selected. It is shorthand, not a separate orchestration engine.
 The framework loads `lib/suite.py` from this directory. Private helpers live
 under `lib`, including the C interface in `lib/mshv.h`. Python policy helpers
 use relative imports in an isolated package, not the framework's `villain`
@@ -335,13 +353,13 @@ No Python package installation or `PYTHONPATH` setting is required.
 For example, from this directory:
 
 ```sh
-./run-mshv \
-  --vmm ~/cloud-hypervisor/target/release/cloud-hypervisor \
+./run \
+  --vmm /path/cloud-hypervisor \
   --timeout 180 --repeat 3 ML001 MR001 MR003
 ```
 
-The neighboring Cloud Hypervisor checkout must be built with its MSHV
-backend. The suite boots nested Hyper-V with two vCPUs, 2 GiB RAM and serial
+The selected Cloud Hypervisor executable must support its MSHV backend.
+The suite boots nested Hyper-V with two vCPUs, 2 GiB RAM and serial
 output.
 
 `--initramfs PATH` selects an explicit separate MSHV archive. Omitting test IDs
@@ -364,7 +382,7 @@ cleanup but do not establish kernel conformance or appliance boot success.
 ## Coverage and results
 
 Each source file contains its test ID, short description and expected
-results. The ID consists of a category prefix and a three digit number.
+results. The ID consists of a category prefix and a four digit number.
 Tests use one registration per source file.
 
 | Prefix | Category | Sources |
@@ -372,7 +390,7 @@ Tests use one registration per source file.
 | ML | MSHV lifecycle | [tests/ml](tests/ml) |
 | MR | MSHV register access | [tests/mr](tests/mr) |
 
-Use `./run-mshv --list` to list IDs and descriptions directly from the
+Use `./run --list` to list IDs and descriptions directly from the
 source registrations, even before building the executable. Execution uses
 the compiled catalog, so rebuild after adding or changing tests.
 

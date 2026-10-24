@@ -77,5 +77,5 @@ def create_suite():
                      protocol_prefix="MSHV", host_shutdown=True,
                      kernel_build_hint=(
                          f"Build it with make -C {ROOT} kernel "
-                         "MSHV_SOURCE=PATH KERNEL_CONFIGS=PATH, "
+                         "MSHV_SOURCE=PATH, "
                          "or select another image with --kernel PATH."))

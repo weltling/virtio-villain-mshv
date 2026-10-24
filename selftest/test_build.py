@@ -51,7 +51,7 @@ class BuildTests(unittest.TestCase):
             root = Path(temporary)
             suite = root / "checkouts/mshv"
             suite.mkdir(parents=True)
-            for name in ("Makefile", "run-mshv"):
+            for name in ("Makefile", "run"):
                 shutil.copy(ROOT / name, suite / name)
             record = root / "wrapper.json"
             default = suite.parent / "virtio-villain"
@@ -79,7 +79,7 @@ class BuildTests(unittest.TestCase):
                         text=True, timeout=20)
                     self.assertIn(f"(current: {framework})", result.stdout)
                     subprocess.run([
-                        str(suite / "run-mshv"), "--list",
+                        str(suite / "run"), "--list",
                     ], cwd=root, env=environment, check=True,
                         capture_output=True, text=True, timeout=20)
                     self.assertEqual(json.loads(record.read_text()), {
@@ -137,7 +137,7 @@ class BuildTests(unittest.TestCase):
             (root / "lib").mkdir()
             source = root / "source tree"
             source.mkdir()
-            config = source / "configs/test.config"
+            config = source / "Microsoft/configs/x86/mshv_defconfig"
             config.parent.mkdir(parents=True)
             config.write_text("CONFIG_RUSTC_VERSION=0\nCONFIG_RUSTC_LLVM_VERSION=0\n")
             (source / "configure.py").write_text(
@@ -185,7 +185,11 @@ class BuildTests(unittest.TestCase):
             default = root / "target/kernel"
             custom = root / "custom-kernel"
             rust_output = root / "rust-kernel"
+            environment = dict(os.environ, RUSTC="rustc")
+            environment.pop("KERNEL_CONFIGS", None)
             cases = (
+                ([], [config], "false", default),
+                (["KERNEL_CONFIGS=   "], [config], "false", default),
                 ([f'KERNEL_CONFIGS="{config}"'], [config], "false", default),
                 ([f'KERNEL_CONFIGS="{config}"', "RUSTC=false"], [config], "false", default),
                 ([f"KERNEL_CONFIGS={base} {fragment}",
@@ -202,7 +206,7 @@ class BuildTests(unittest.TestCase):
                         str((FRAMEWORK if public else ROOT) / "Makefile"),
                         f"SUITE={root}" if public else f"VV_ROOT={framework}",
                         f"MSHV_SOURCE={source}", *goals,
-                    ], env=dict(os.environ, RUSTC="rustc"),
+                    ], env=environment,
                         check=True, capture_output=True, text=True, timeout=20)
                     command = json.loads(record.read_text())
                     self.assertEqual(command["rustc"], compiler)
@@ -229,7 +233,7 @@ class BuildTests(unittest.TestCase):
                         self.assertIn("CONFIG_FIXTURE=y", text)
                         self.assertNotIn("CONFIG_FIXTURE=m", text)
 
-    def test_kernel_source_and_configs_must_be_explicit(self):
+    def test_kernel_source_must_be_explicit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             framework = root / "framework"
@@ -240,8 +244,7 @@ class BuildTests(unittest.TestCase):
             environment.pop("KERNEL_CONFIGS", None)
             for overrides, expected in (
                     ([], "Set MSHV_SOURCE"),
-                    (["MSHV_SOURCE=   "], "Set MSHV_SOURCE"),
-                    ([f"MSHV_SOURCE={root / 'source'}"], "Set KERNEL_CONFIGS")):
+                    (["MSHV_SOURCE=   "], "Set MSHV_SOURCE")):
                 with self.subTest(overrides=overrides):
                     result = subprocess.run([
                         "make", "--no-print-directory", "-C", str(root),
@@ -259,7 +262,8 @@ class BuildTests(unittest.TestCase):
         for text in (
                 "initramfs", "kernel", "MSHV_SOURCE", "VV_ROOT", "TARGET",
                 "KERNEL_CONFIGS", "KERNEL_ARGS", "RUSTC", "--output", "--jobs",
-                "Later files override earlier values"):
+                "Later files override earlier values",
+                "Microsoft/configs/x86/mshv_defconfig", "replaces the default config"):
             self.assertIn(text, result.stdout)
 
     def test_clean_removes_the_whole_selected_output_tree(self):

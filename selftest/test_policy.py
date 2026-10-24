@@ -92,7 +92,8 @@ class PolicyTests(unittest.TestCase):
         suite = appliance.load_suite(ROOT)
         self.assertIsNone(suite.kernel)
         self.assertIn(f"make -C {ROOT} kernel ", suite.kernel_build_hint)
-        self.assertIn("MSHV_SOURCE=PATH KERNEL_CONFIGS=PATH", suite.kernel_build_hint)
+        self.assertIn("MSHV_SOURCE=PATH", suite.kernel_build_hint)
+        self.assertNotIn("KERNEL_CONFIGS=PATH", suite.kernel_build_hint)
         self.assertIsNone(appliance.parse_args(suite, ["--list"]).kernel)
         with tempfile.TemporaryDirectory() as work:
             kernel = Path(work) / "built-kernel"
