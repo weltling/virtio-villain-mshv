@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 from villain.appliance import Suite, executable, source_catalog
+from villain.vmm import CloudHypervisor, LaunchConfig
 from .boot_image import FIRMWARE, build_image, resolve_firmware, validate_boot_inputs
 from .build import create_build
 from .sources import test_sources
@@ -62,11 +63,10 @@ class MshvSuite(Suite):
         output = args.output
         disk = build_image(output, args.kernel, args.initramfs, args.cmdline,
                            firmware=args.firmware)
-        command = [
-            args.vmm, "--firmware", str(output / "firmware.fd"),
-            "--disk", f"path={disk},image_type=raw,readonly=on",
-            "--cpus", "boot=2,nested=on", "--memory", "size=2G",
-            "--serial", "tty", "--console", "off"]
+        command = CloudHypervisor(args.vmm).build_launch_cmd(
+            LaunchConfig(cpus=2, memory="2G", firmware=output / "firmware.fd"),
+            nested=True, serial="tty", console="off")
+        command += ["--disk", f"path={disk},image_type=raw,readonly=on"]
         print("Nested Hyper-V launch: " + " ".join(command), flush=True)
         os.execvp(args.vmm, command)
 
