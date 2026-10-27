@@ -307,6 +307,9 @@ class BootImageTests(unittest.TestCase):
             "--output", str(output)]
         with patch.object(module, "build_image", return_value=output / "boot.img") as build, \
              patch.object(module.os, "execvp") as execute, \
+             patch.object(module.CloudHypervisor, "build_cmd",
+                          side_effect=AssertionError("Virtio fixtures must not be selected")), \
+             patch.dict(os.environ, {"VV_CH_DEBUG": "1"}), \
              contextlib.redirect_stdout(io.StringIO()):
             suite.execute(arguments)
         build.assert_called_once_with(
@@ -314,12 +317,11 @@ class BootImageTests(unittest.TestCase):
             firmware=Path("/selected/firmware"))
         command = execute.call_args.args[1]
         self.assertEqual(execute.call_args.args[0], "/vmm")
-        self.assertEqual(command[command.index("--firmware") + 1],
-                         str(output / "firmware.fd"))
-        self.assertEqual(command[command.index("--disk") + 1],
-                         f"path={output / 'boot.img'},image_type=raw,readonly=on")
-        self.assertEqual(command[command.index("--cpus") + 1], "boot=2,nested=on")
-        self.assertEqual(command[command.index("--memory") + 1], "size=2G")
+        self.assertEqual(command, [
+            "/vmm", "--firmware", str(output / "firmware.fd"),
+            "--cpus", "boot=2,nested=on", "--memory", "size=2G",
+            "--serial", "tty", "--console", "off",
+            "--disk", f"path={output / 'boot.img'},image_type=raw,readonly=on"])
 
     def test_suite_does_not_start_a_vm_after_builder_failure(self):
         suite = load_suite(ROOT)
