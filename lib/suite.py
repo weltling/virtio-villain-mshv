@@ -44,7 +44,8 @@ class MshvSuite(Suite):
         return self.execution_command([
             "--vmm", args.vmm, "--kernel", str(args.kernel),
             "--initramfs", str(args.initramfs), "--firmware", str(args.firmware),
-            "--cmdline", cmdline, "--run-id", run_id])
+            "--cmdline", cmdline, "--run-id", run_id,
+            "--output", str(args.workspace / "boot")])
 
     def execute(self, argv):
         parser = argparse.ArgumentParser(description="Boot the MSHV appliance")
@@ -54,10 +55,11 @@ class MshvSuite(Suite):
         parser.add_argument("--firmware", required=True, type=Path)
         parser.add_argument("--cmdline", required=True)
         parser.add_argument("--run-id", required=True)
+        parser.add_argument("--output", required=True, type=Path)
         args = parser.parse_args(argv)
         if not re.fullmatch(r"[A-Za-z0-9_-]+", args.run_id):
             parser.error("Invalid run identifier")
-        output = ROOT / "target/nested-hyperv/runs" / args.run_id
+        output = args.output
         disk = build_image(output, args.kernel, args.initramfs, args.cmdline,
                            firmware=args.firmware)
         command = [

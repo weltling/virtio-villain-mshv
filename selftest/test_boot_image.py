@@ -7,6 +7,7 @@ import gzip
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -18,6 +19,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent / "virtio-villain/lib/python"))
+from villain import appliance  # noqa: E402
 from villain.appliance import load_suite  # noqa: E402
 from villain.initramfs import archive as initramfs_archive  # noqa: E402
 
@@ -297,11 +299,12 @@ class BootImageTests(unittest.TestCase):
     def test_suite_prepares_the_boot_disk_and_executes_the_selected_vmm(self):
         suite = load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        output = ROOT / "target/nested-hyperv/runs/launcher-test"
+        output = Path("/diagnostics/artifacts/1-ML001/boot")
         arguments = [
             "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
             "--firmware", "/selected/firmware",
-            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test"]
+            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test",
+            "--output", str(output)]
         with patch.object(module, "build_image", return_value=output / "boot.img") as build, \
              patch.object(module.os, "execvp") as execute, \
              contextlib.redirect_stdout(io.StringIO()):
@@ -324,7 +327,8 @@ class BootImageTests(unittest.TestCase):
         arguments = [
             "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
             "--firmware", "/selected/firmware",
-            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test"]
+            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test",
+            "--output", "/diagnostics/artifacts/1-ML001/boot"]
         with patch.object(module, "build_image", side_effect=RuntimeError("Builder failed")), \
              patch.object(module.os, "execvp") as execute, \
              self.assertRaisesRegex(RuntimeError, "Builder failed"):
@@ -368,6 +372,8 @@ class BootImageTests(unittest.TestCase):
                  self.assertRaisesRegex(PermissionError, "Component is unreadable"):
                 boot_image.build_image(root / "image", cmdline="vv.run=token", **inputs)
             self.assertTrue(all(call.args[0][0] != "sudo" for call in run.call_args_list))
+            self.assertEqual(list((root / "image").iterdir()), [])
+            self.assertFalse((root / "target").exists())
 
     @unittest.skipUnless(all(shutil.which(tool) for tool in (
         "sfdisk", "mkfs.vfat", "mmd", "mcopy", "mdir", "mtype")),
@@ -393,4 +399,71 @@ class BootImageTests(unittest.TestCase):
                 contents = subprocess.check_output([
                     "mtype", "-i", f"{disk}@@1048576", f"::/{name}"])
                 self.assertEqual(contents, (output / "grub.cfg").read_bytes())
-            self.assertEqual(list((root / "target/image-work").iterdir()), [])
+            self.assertEqual({path.name for path in output.iterdir()},
+                             {"boot.img", "firmware.fd", "grub.cfg", "manifest.json"})
+            self.assertFalse((root / "target").exists())
+
+    @unittest.skipUnless(all(shutil.which(tool) for tool in boot_image.IMAGE_TOOLS),
+                         "Disk image tools required")
+    def test_run_artifacts_follow_default_build_and_explicit_output_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = boot_inputs(root)
+            source = root / "suite"
+            private = source / "lib"
+            private.mkdir(parents=True)
+            for name in ("suite.py", "boot_image.py", "build.py", "sources.py"):
+                shutil.copyfile(ROOT / "lib" / name, private / name)
+            vmm = root / "fixture-vmm"
+            vmm.write_text(
+                f"#!{sys.executable}\n"
+                "import json, signal, sys\n"
+                "from pathlib import Path\n"
+                "firmware = Path(sys.argv[sys.argv.index('--firmware') + 1])\n"
+                "manifest = json.loads((firmware.parent / 'manifest.json').read_text())\n"
+                "options = dict(word.split('=', 1) for word in manifest['cmdline'].split()\n"
+                "               if '=' in word)\n"
+                "token, name = options['vv.run'], options['vv.tests']\n"
+                "print(f'MSHV-BEGIN {token} mshv-uapi-v1')\n"
+                "print(f'MSHV-RUN {token} {name}')\n"
+                "print(f'MSHV-RESULT {token} {name} PASS')\n"
+                "print(f'MSHV-SUMMARY {token} 1 0 0 0')\n"
+                "print(f'MSHV-END {token} 0')\n"
+                "print(f'vv-appliance-stop {token}', flush=True)\n"
+                "signal.pause()\n")
+            vmm.chmod(0o755)
+            for mode in ("default", "build-dir", "output"):
+                with self.subTest(mode=mode), \
+                     patch.dict(os.environ, {"MSHV_ESP": str(inputs["esp"]), "TARGET": "target"}):
+                    suite = load_suite(source)
+                    options = [] if mode == "default" else ["--build-dir", "selected-build"]
+                    if mode == "output":
+                        options.extend(["--output", str(root / "selected diagnostics")])
+                    args = appliance.parse_args(suite, [
+                        "--kernel", str(inputs["kernel"]),
+                        "--initramfs", str(inputs["initramfs"]),
+                        "--firmware", str(inputs["firmware"]),
+                        "--vmm", str(vmm), *options])
+                    with contextlib.redirect_stdout(io.StringIO()) as captured:
+                        status = appliance.launch(suite, args, ["ML001"])
+                    self.assertEqual(status, 0, captured.getvalue())
+                    target = source / ("target" if mode == "default" else "selected-build")
+                    directory = (root / "selected diagnostics" if mode == "output" else
+                                 next((target / "mshv/results").iterdir()))
+                    report = json.loads((directory / "results.json").read_text())
+                    run = report["runs"][0]
+                    workspace = directory / "artifacts/1-ML001"
+                    self.assertEqual(Path(run["workspace"]), workspace)
+                    self.assertEqual(Path(run["console"]).parent, directory)
+                    self.assertTrue(run["host_shutdown"])
+                    output = workspace / "boot"
+                    self.assertEqual({path.name for path in output.iterdir()},
+                                     {"boot.img", "firmware.fd", "grub.cfg", "manifest.json"})
+                    manifest = json.loads((output / "manifest.json").read_text())
+                    self.assertIn("vv.run=" + run["run_id"], manifest["cmdline"])
+                    self.assertEqual(report["kernel_sha256"],
+                                     boot_image.sha256(inputs["kernel"]))
+                    self.assertEqual(report["initramfs_sha256"],
+                                     boot_image.sha256(inputs["initramfs"]))
+                    self.assertFalse((source / "target/nested-hyperv").exists())
+                    self.assertFalse((source / "target/image-work").exists())

@@ -268,8 +268,11 @@ boot validation in the supported environment.
 
 The output directory contains `boot.img`, `firmware.fd`, `grub.cfg` and
 `manifest.json`. The manifest records source paths and hashes. Temporary
-assembly files live under `target/image-work/assemble-*` and are removed
-after construction. Choose a new output directory for another build.
+assembly files live under `assemble-*` inside the chosen output directory
+and are removed when construction completes or raises an error. Forcibly
+terminating preparation can leave partial assembly files there for inspection.
+Choose a new output directory for another build. An existing directory is
+never overwritten.
 
 The disk has a GPT EFI System Partition. Its boot sequence is firmware,
 shim, GRUB, Hyper-V and then the selected kernel with the test initramfs.
@@ -363,8 +366,23 @@ The suite boots nested Hyper-V with two vCPUs, 2 GiB RAM and serial
 output.
 
 `--initramfs PATH` selects an explicit separate MSHV archive. Omitting test IDs
-runs all tests. `--output PATH` selects a new diagnostics directory.
+runs all tests. `--output PATH` selects a new directory for diagnostics and
+runtime boot artifacts.
 Each test gets a fresh VM boot with its own console log and timeout.
+By default, reports and logs are under `target/mshv/results/TIMESTAMP-ID/`.
+Each test and repetition has a directory at
+`artifacts/ITERATION-TEST_ID/boot/` below that location. The boot image and
+firmware copy are `boot.img` and `firmware.fd`. The directory also contains
+`grub.cfg` and `manifest.json`.
+Its parent workspace path is recorded in that test's `results.json` entry.
+Artifacts are retained after successful runs and preparation failures.
+They are also retained after timeouts or interruption.
+`--build-dir PATH` changes the default results location with the selected
+build root. An explicit `--output PATH` keeps reports and logs with boot
+artifacts at that location. Runtime
+preparation no longer writes to fixed `target/nested-hyperv/runs` or
+`target/image-work` directories. Existing artifacts in those directories are
+left untouched. Reusable build outputs and firmware downloads remain separate.
 `--jobs N` limits concurrent VMs, with one as the default. For example,
 `--jobs 16` runs the selected cases concurrently without sharing VMs.
 `--repeat 3` runs three complete sequences of those separate boots.

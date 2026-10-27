@@ -256,15 +256,13 @@ def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
     validate_boot_inputs(kernel, initramfs, esp, firmware)
     config = grub_config(cmdline)
     output.mkdir(parents=True, exist_ok=False)
-    workspace = ROOT / "target/image-work"
-    workspace.mkdir(parents=True, exist_ok=True)
     sources = {
         **{name: esp / source for name, source in ESP_COMPONENTS.items()},
         "boot/vmlinuz": kernel,
         "boot/initramfs.cpio.gz": initramfs,
     }
     manifest = {"cmdline": cmdline, "files": {}, "firmware_source": str(firmware)}
-    with tempfile.TemporaryDirectory(prefix="assemble-", dir=workspace) as temporary:
+    with tempfile.TemporaryDirectory(prefix="assemble-", dir=output) as temporary:
         scratch = Path(temporary)
         partition = scratch / "esp.fat"
         with partition.open("xb") as stream:

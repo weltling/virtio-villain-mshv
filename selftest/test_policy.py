@@ -107,8 +107,11 @@ class PolicyTests(unittest.TestCase):
             args = appliance.parse_args(suite, [
                 "--build-dir", str(target), "--initramfs", str(archive), "ML001"])
             self.assertEqual(args.kernel, kernel)
+            args.workspace = target / "mshv/results/fixture/artifacts/1-ML001"
             command = suite.build_command(args, ["ML001"], "token")
             self.assertEqual(command[command.index("--kernel") + 1], str(kernel))
+            self.assertEqual(command[command.index("--output") + 1],
+                             str(args.workspace / "boot"))
 
     def test_source_listing_without_an_appliance_binary(self):
         output = io.StringIO()
@@ -137,6 +140,7 @@ class PolicyTests(unittest.TestCase):
                 "--kernel", str(image), "--initramfs", str(image),
                 "--vmm", "/local/cloud-hypervisor", "--firmware", str(image),
                 "--jobs", "16", "ML001"])
+            args.workspace = Path(work) / "diagnostics/artifacts/1-ML001"
         self.assertEqual(args.jobs, 16)
         self.assertFalse(suite.requires_control)
         self.assertIsNone(args.control)
@@ -160,6 +164,8 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(command[command.index("--vmm") + 1], "/local/cloud-hypervisor")
         self.assertEqual(command[command.index("--run-id") + 1], "token")
         self.assertEqual(command[command.index("--firmware") + 1], str(image))
+        self.assertEqual(command[command.index("--output") + 1],
+                         str(args.workspace / "boot"))
         self.assertIn("vv.tests=ML001", command[command.index("--cmdline") + 1])
         self.assertIn("vv.shutdown=host", command[command.index("--cmdline") + 1])
         self.assertTrue(suite.host_shutdown)
@@ -256,6 +262,7 @@ class PolicyTests(unittest.TestCase):
              patch.object(os, "close"):
             suite.preflight(args)
             for token in ("first", "second"):
+                args.workspace = Path("/diagnostics") / token
                 command = suite.build_command(args, ["ML001"], token)
                 self.assertEqual(command[command.index("--firmware") + 1], str(firmware))
         resolve.assert_called_once_with(None, offline=True)
@@ -264,6 +271,7 @@ class PolicyTests(unittest.TestCase):
     def test_worker_builds_with_selected_firmware_without_resolving_again(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
+        output = Path("/diagnostics/artifacts/1-ML001/boot")
         with patch.object(module, "resolve_firmware",
                           side_effect=AssertionError("Worker must not resolve firmware")), \
              patch.object(module, "build_image", return_value=Path("/disk")) as build, \
@@ -271,13 +279,12 @@ class PolicyTests(unittest.TestCase):
             suite.execute([
                 "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/initramfs",
                 "--firmware", "/selected/firmware", "--cmdline", "vv.tests=ML001",
-                "--run-id", "fixture"])
+                "--run-id", "fixture", "--output", str(output)])
         build.assert_called_once_with(
-            ROOT / "target/nested-hyperv/runs/fixture", Path("/kernel"), Path("/initramfs"),
+            output, Path("/kernel"), Path("/initramfs"),
             "vv.tests=ML001", firmware=Path("/selected/firmware"))
         execute.assert_called_once()
-        self.assertEqual(execute.call_args.args[1][2], str(
-            ROOT / "target/nested-hyperv/runs/fixture/firmware.fd"))
+        self.assertEqual(execute.call_args.args[1][2], str(output / "firmware.fd"))
 
     def test_firmware_resolution_failure_is_one_infrastructure_error(self):
         suite = appliance.load_suite(ROOT)
