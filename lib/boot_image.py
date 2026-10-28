@@ -23,6 +23,12 @@ FIRMWARE = Path("/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd")
 FIRMWARE_REPOSITORY = "cloud-hypervisor/edk2"
 FIRMWARE_ASSET = "CLOUDHV.fd"
 IMAGE_TOOLS = ("sfdisk", "mkfs.vfat", "mmd", "mcopy", "mdir")
+BOOT_DISK_SIZE = 130 * 1024 * 1024
+ESP_SIZE = 128 * 1024 * 1024
+ESP_OFFSET = 1024 * 1024
+SECTOR_SIZE = 512
+ESP_START_SECTOR = ESP_OFFSET // SECTOR_SIZE
+ESP_SECTOR_COUNT = ESP_SIZE // SECTOR_SIZE
 ESP_COMPONENTS = {
     "EFI/BOOT/BOOTX64.EFI": "EFI/BOOT/bootx64.efi",
     "EFI/BOOT/grubx64.efi": "EFI/BOOT/grubx64.efi",
@@ -255,6 +261,8 @@ def resolve_firmware(firmware=None, *, offline=False):
 def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
     validate_boot_inputs(kernel, initramfs, esp, firmware)
     config = grub_config(cmdline)
+    from villain.images import create_raw
+
     output.mkdir(parents=True, exist_ok=False)
     sources = {
         **{name: esp / source for name, source in ESP_COMPONENTS.items()},
@@ -265,8 +273,7 @@ def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
     with tempfile.TemporaryDirectory(prefix="assemble-", dir=output) as temporary:
         scratch = Path(temporary)
         partition = scratch / "esp.fat"
-        with partition.open("xb") as stream:
-            stream.truncate(128 * 1024 * 1024)
+        create_raw(partition, ESP_SIZE, exclusive=True)
         subprocess.run(["mkfs.vfat", "-F", "32", "-n", "MSHVBOOT", str(partition)], check=True)
         directories = ("EFI", "EFI/BOOT", "Windows", "Windows/System32", "boot", "boot/grub2")
         subprocess.run(["mmd", "-i", str(partition),
@@ -283,16 +290,15 @@ def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
             subprocess.run(["mcopy", "-i", str(partition), str(config_path), f"::/{name}"],
                            check=True)
         disk = output / "boot.img"
-        with disk.open("xb") as stream:
-            stream.truncate(130 * 1024 * 1024)
+        create_raw(disk, BOOT_DISK_SIZE, exclusive=True)
         subprocess.run(["sfdisk", str(disk)], input=(
             "label: gpt\nunit: sectors\n"
-            "start=2048,size=262144,type=U,name=\"MSHVBOOT\"\n"
+            f"start={ESP_START_SECTOR},size={ESP_SECTOR_COUNT},type=U,name=\"MSHVBOOT\"\n"
         ), text=True, check=True)
         with disk.open("r+b") as destination, partition.open("rb") as source:
-            destination.seek(1024 * 1024)
+            destination.seek(ESP_OFFSET)
             shutil.copyfileobj(source, destination)
-        subprocess.run(["mdir", "-i", f"{disk}@@1048576", "::/EFI/BOOT"], check=True)
+        subprocess.run(["mdir", "-i", f"{disk}@@{ESP_OFFSET}", "::/EFI/BOOT"], check=True)
     shutil.copyfile(firmware, output / "firmware.fd")
     manifest["firmware_sha256"] = sha256(output / "firmware.fd")
     manifest["disk_sha256"] = sha256(disk)
