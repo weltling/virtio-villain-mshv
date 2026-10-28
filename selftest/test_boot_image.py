@@ -19,13 +19,20 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent / "virtio-villain/lib/python"))
-from villain import appliance  # noqa: E402
+from villain import appliance, images  # noqa: E402
 from villain.appliance import load_suite  # noqa: E402
 from villain.initramfs import archive as initramfs_archive  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("mshv_boot_image", ROOT / "lib/boot_image.py")
 boot_image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(boot_image)
+
+EXPECTED_BOOT_DISK_SIZE = 130 * 1024 * 1024
+EXPECTED_ESP_SIZE = 128 * 1024 * 1024
+EXPECTED_ESP_OFFSET = 1024 * 1024
+EXPECTED_SECTOR_SIZE = 512
+EXPECTED_ESP_START_SECTOR = 2048
+EXPECTED_ESP_SECTOR_COUNT = 262144
 
 
 def pe_image():
@@ -385,9 +392,28 @@ class BootImageTests(unittest.TestCase):
             root = Path(temporary)
             inputs = boot_inputs(root)
             output = root / "image"
-            with patch.object(boot_image, "ROOT", root):
+            with patch.object(boot_image, "ROOT", root), \
+                 patch.object(images, "create_raw", wraps=images.create_raw) as create_raw:
                 disk = boot_image.build_image(
                     output, cmdline="vv.run=token vv.tests=ML001", **inputs)
+            self.assertEqual(len(create_raw.call_args_list), 2)
+            partition, whole_disk = create_raw.call_args_list
+            self.assertEqual(partition.args[0].name, "esp.fat")
+            self.assertEqual(partition.args[1], EXPECTED_ESP_SIZE)
+            self.assertEqual(partition.kwargs, {"exclusive": True})
+            self.assertEqual(whole_disk.args, (disk, EXPECTED_BOOT_DISK_SIZE))
+            self.assertEqual(whole_disk.kwargs, {"exclusive": True})
+            self.assertEqual(disk.stat().st_size, EXPECTED_BOOT_DISK_SIZE)
+            table = json.loads(subprocess.check_output(["sfdisk", "--json", str(disk)]))[
+                "partitiontable"]
+            self.assertEqual(table["label"], "gpt")
+            self.assertEqual(table["sectorsize"], EXPECTED_SECTOR_SIZE)
+            self.assertEqual(len(table["partitions"]), 1)
+            esp = table["partitions"][0]
+            self.assertEqual(
+                (esp["start"], esp["size"], esp["name"]),
+                (EXPECTED_ESP_START_SECTOR, EXPECTED_ESP_SECTOR_COUNT, "MSHVBOOT"))
+            self.assertEqual(esp["type"].upper(), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(manifest["disk_sha256"], boot_image.sha256(disk))
             self.assertEqual((output / "firmware.fd").read_bytes(), inputs["firmware"].read_bytes())
@@ -395,11 +421,11 @@ class BootImageTests(unittest.TestCase):
                 source = Path(metadata["source"])
                 self.assertEqual(metadata["sha256"], boot_image.sha256(source))
                 contents = subprocess.check_output([
-                    "mtype", "-i", f"{disk}@@1048576", f"::/{name}"])
+                    "mtype", "-i", f"{disk}@@{EXPECTED_ESP_OFFSET}", f"::/{name}"])
                 self.assertEqual(contents, source.read_bytes())
             for name in ("boot/grub2/grub.cfg", "EFI/BOOT/grub.cfg", "grub.cfg"):
                 contents = subprocess.check_output([
-                    "mtype", "-i", f"{disk}@@1048576", f"::/{name}"])
+                    "mtype", "-i", f"{disk}@@{EXPECTED_ESP_OFFSET}", f"::/{name}"])
                 self.assertEqual(contents, (output / "grub.cfg").read_bytes())
             self.assertEqual({path.name for path in output.iterdir()},
                              {"boot.img", "firmware.fd", "grub.cfg", "manifest.json"})
