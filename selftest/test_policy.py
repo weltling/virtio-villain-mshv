@@ -15,7 +15,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT.parent / "virtio-villain/lib/python"))
+FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
+sys.path.insert(0, str(FRAMEWORK / "lib/python"))
 from villain import appliance  # noqa: E402
 from test_build import install_build_fixture  # noqa: E402
 

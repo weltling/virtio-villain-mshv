@@ -9,11 +9,12 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORK = ROOT.parent / "virtio-villain"
+FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
 
 
 def install_build_fixture(root, framework):
@@ -46,6 +47,38 @@ def install_build_fixture(root, framework):
 
 @unittest.skipUnless(shutil.which("make"), "Make required for build checks")
 class BuildTests(unittest.TestCase):
+    def test_relocated_selftests_use_the_selected_framework(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            suite = root / "suite"
+            tests = suite / "selftest"
+            tests.mkdir(parents=True)
+            modules = ("test_build", "test_mshv", "test_boot_image", "test_policy")
+            for name in modules:
+                shutil.copyfile(ROOT / "selftest" / f"{name}.py", tests / f"{name}.py")
+            (suite / "lib").mkdir()
+            shutil.copyfile(ROOT / "lib/boot_image.py", suite / "lib/boot_image.py")
+            alternate = root / "alternate"
+            alternate.symlink_to(FRAMEWORK, target_is_directory=True)
+            environment = dict(os.environ, PYTHONPATH=str(tests))
+            for selected in (str(alternate), "alternate"):
+                with self.subTest(selected=selected):
+                    environment["VV_ROOT"] = selected
+                    result = subprocess.run([
+                        sys.executable, "-c",
+                        "import importlib\n"
+                        "from pathlib import Path\n"
+                        f"expected = Path({str(FRAMEWORK.resolve())!r})\n"
+                        f"for name in {modules!r}:\n"
+                        "    module = importlib.import_module(name)\n"
+                        "    assert module.FRAMEWORK == expected, name\n"
+                        "import villain\n"
+                        "assert Path(villain.__file__).resolve().parent == "
+                        "expected / 'lib/python/villain'\n",
+                    ], cwd=root, env=environment,
+                        capture_output=True, text=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_build_and_wrapper_use_the_same_framework_location(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

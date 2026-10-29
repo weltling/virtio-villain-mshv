@@ -3,6 +3,7 @@
 """Private ABI and IOCTL fixture checks; generic runner tests live upstream."""
 
 import errno
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORK = ROOT.parent / "virtio-villain"
+FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
 
 
 class AbiTests(unittest.TestCase):
