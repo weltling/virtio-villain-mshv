@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+name: selftest
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: virtio-villain-mshv
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: virtio-villain-mshv
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: weltling/virtio-villain
+          path: virtio-villain
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y build-essential python3
+      - run: make -j$(nproc) init initramfs
+      - run: test -s target/mshv/init && test -s target/mshv/initramfs.cpio.gz
+      - run: ./run --list
+  selftest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: virtio-villain-mshv
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: virtio-villain-mshv
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: weltling/virtio-villain
+          path: virtio-villain
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y build-essential python3 fdisk dosfstools mtools
+      - run: make -j$(nproc) init initramfs
+      - run: make selftest
+  flake8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y flake8
+      - run: make lint
+  gitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y gitlint
+      - name: Run gitlint on PR commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: gitlint --commits "$BASE_SHA..$HEAD_SHA"
+      - name: Run gitlint on last commit
+        if: github.event_name == 'push'
+        run: gitlint --commits HEAD~1..HEAD
