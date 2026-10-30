@@ -15,8 +15,8 @@ from .boot_image import ESP_COMPONENTS, _validate_pe, sha256
 
 PACKAGE_URL = "https://packages.microsoft.com/azurelinux/3.0/prod/"
 PACKAGES = {
-    "base/x86_64/Packages/s/shim-16.1-1.azl3.x86_64.rpm":
-        "96b829294cc11ee5e0e08178bd544adf2a8033df4ce95650b2183234ae4d40b3",
+    "base/x86_64/Packages/s/shim-15.8-6.azl3.x86_64.rpm":
+        "192f18a34eb5be85d6cbba278824e2fbaf7e3af8df3d40c56a24df7256eb5205",
     "base/x86_64/Packages/g/grub2-efi-binary-2.06-27.azl3.x86_64.rpm":
         "c47d6e5becf63971609dd198035f8bc30fac9271d3a0367d01380b466601303d",
     "base/x86_64/Packages/h/hvloader-1.0.1-5.azl3.x86_64.rpm":
