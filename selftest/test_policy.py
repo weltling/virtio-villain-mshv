@@ -4,6 +4,7 @@
 
 import contextlib
 import io
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
+FRAMEWORK = (ROOT.parent / "virtio-villain").resolve()
 sys.path.insert(0, str(FRAMEWORK / "lib/python"))
 from villain import appliance  # noqa: E402
 from test_build import install_build_fixture  # noqa: E402
@@ -141,14 +142,15 @@ class PolicyTests(unittest.TestCase):
                         self.assertEqual(suite.list_tests(None), {
                             name: f"Fixture {name}" for name in names})
 
-    def test_execution_help_exposes_environment_and_build_help(self):
+    def test_execution_help_exposes_arguments_and_build_help(self):
         with contextlib.redirect_stdout(io.StringIO()) as output, \
              self.assertRaises(SystemExit) as exit:
             appliance.main(["--suite", str(ROOT), "--help"])
         self.assertEqual(exit.exception.code, 0)
         text = " ".join(output.getvalue().split())
-        for expected in ("MSHV_VMM", "--esp", "CLOUDHV_EFI.fd", "make help",
-                         "--kernel", "--firmware", "--offline", "SHA256"):
+        for expected in ("--vmm", "--esp", "CLOUDHV_EFI.fd", "make help",
+                         "--kernel", "--firmware", "--offline", "SHA256",
+                         "openvmm-firmware/MSVM.fd", "make openvmm-firmware"):
             self.assertIn(expected, text)
         self.assertNotIn("/boot/efi", text)
 
@@ -307,21 +309,14 @@ class PolicyTests(unittest.TestCase):
 
     def test_default_nested_boot_needs_no_launcher_selection(self):
         suite = appliance.load_suite(ROOT)
-        for override in (None, "/alternate/cloud-hypervisor"):
-            with self.subTest(override=override), \
-                 patch.dict(os.environ, {}, clear=True):
-                if override:
-                    os.environ["MSHV_VMM"] = override
-                args = appliance.parse_args(suite, ["--list"])
-                expected = override or "cloud-hypervisor"
-                self.assertEqual(args.vmm, expected)
-                self.assertFalse(hasattr(args, "launcher"))
-
-    def test_explicit_vmm_overrides_the_environment_default(self):
-        suite = appliance.load_suite(ROOT)
-        with patch.dict(os.environ, {"MSHV_VMM": "/environment/vmm"}):
-            args = appliance.parse_args(suite, ["--list", "--vmm", "cloud-hypervisor"])
+        args = appliance.parse_args(suite, ["--list"])
         self.assertEqual(args.vmm, "cloud-hypervisor")
+        self.assertFalse(hasattr(args, "launcher"))
+
+    def test_explicit_vmm_selects_the_executable(self):
+        suite = appliance.load_suite(ROOT)
+        args = appliance.parse_args(suite, ["--list", "--vmm", "/selected/openvmm"])
+        self.assertEqual(args.vmm, "/selected/openvmm")
 
     def test_openvmm_preflight_checks_kvm_without_cloud_firmware_resolution(self):
         suite = appliance.load_suite(ROOT)
@@ -348,18 +343,73 @@ class PolicyTests(unittest.TestCase):
                 command = suite.build_command(args, ["ML0001"], "token")
                 self.assertEqual(command[command.index("--backend") + 1], backend)
                 self.assertEqual(command[command.index("--esp") + 1], "/components")
+                self.assertEqual(command[command.index("--firmware") + 1], "/local/MSVM.fd")
 
-    def test_openvmm_requires_its_own_firmware(self):
+    def test_openvmm_uses_prepared_firmware_from_the_selected_output(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        args = appliance.parse_args(suite, [
-            "--list", "--vmm", "/local/openvmm", "--esp", "/components"])
-        with patch.object(module, "resolve_firmware") as resolve, \
-             patch.object(os, "open") as opened, \
-             self.assertRaisesRegex(RuntimeError, "OpenVMM requires --firmware"):
-            suite.preflight(args)
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            default = root / "default"
+            cases = product(
+                (None, root / "custom"),
+                (("/local/openvmm", "auto"), ("/local/vmm", "openvmm")),
+                (None, root / "components"), (False, True))
+            for selected, (binary, backend), esp, offline in cases:
+                with self.subTest(selected=selected, backend=backend, esp=esp, offline=offline), \
+                     patch.dict(os.environ, {"TARGET": str(default)}):
+                    target = selected or default
+                    firmware = target / "openvmm-firmware/MSVM.fd"
+                    firmware.parent.mkdir(parents=True, exist_ok=True)
+                    firmware.write_bytes(b"firmware")
+                    components = esp or target / "mshv-boot-inputs/esp"
+                    components.mkdir(parents=True, exist_ok=True)
+                    options = ["--list", "--vmm", binary, "--backend", backend]
+                    if selected is not None:
+                        options.extend(["--build-dir", str(selected)])
+                    if esp is not None:
+                        options.extend(["--esp", str(esp)])
+                    if offline:
+                        options.append("--offline")
+                    args = appliance.parse_args(suite, options)
+                    with patch.object(module, "resolve_firmware") as resolve, \
+                         patch.object(module, "validate_boot_inputs") as validate, \
+                         patch.object(module, "executable"), \
+                         patch.object(os, "open", return_value=42) as opened, \
+                         patch.object(os, "close"), \
+                         patch("urllib.request.urlopen") as network:
+                        suite.preflight(args)
+                    self.assertEqual(args.firmware, firmware)
+                    validate.assert_called_once_with(
+                        args.kernel, args.initramfs, components, firmware=firmware)
+                    resolve.assert_not_called()
+                    network.assert_not_called()
+                    opened.assert_called_once_with("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+                    args.workspace = root / "diagnostics"
+                    command = suite.build_command(args, ["ML0001"], "token")
+                    self.assertEqual(command[command.index("--firmware") + 1], str(firmware))
+
+    def test_missing_prepared_openvmm_firmware_fails_without_fetching(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        with tempfile.TemporaryDirectory() as work:
+            firmware = Path(work) / "openvmm-firmware/MSVM.fd"
+            args = appliance.parse_args(suite, [
+                "--list", "--vmm", "/local/openvmm", "--build-dir", work,
+                "--esp", "/components"])
+            with patch.object(module, "resolve_firmware") as resolve, \
+                 patch.object(module, "validate_boot_inputs") as validate, \
+                 patch.object(module, "executable") as executable, \
+                 patch.object(os, "open") as opened, \
+                 patch("urllib.request.urlopen") as network, \
+                 self.assertRaisesRegex(RuntimeError, "make openvmm-firmware") as error:
+                suite.preflight(args)
+            self.assertIn(str(firmware), str(error.exception))
         resolve.assert_not_called()
+        validate.assert_not_called()
+        executable.assert_not_called()
         opened.assert_not_called()
+        network.assert_not_called()
 
     def test_openvmm_device_failure_is_not_ignored(self):
         suite = appliance.load_suite(ROOT)

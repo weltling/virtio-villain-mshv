@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
+FRAMEWORK = (ROOT.parent / "virtio-villain").resolve()
 sys.path.insert(0, str(FRAMEWORK / "lib/python"))
 from villain import appliance, images  # noqa: E402
 from villain.appliance import load_suite  # noqa: E402
@@ -129,13 +129,13 @@ class FirmwareTests(unittest.TestCase):
             for offline in (False, True):
                 with self.subTest(offline=offline), \
                      patch.object(boot_image, "FIRMWARE", root / "missing.fd"), \
-                     patch.dict(boot_image.os.environ, {"XDG_CACHE_HOME": str(root)}), \
+                     patch.object(boot_image, "ROOT", root), \
                      patch("villain.artifacts.github_release_asset",
                            return_value=selected) as fetch:
                     self.assertEqual(boot_image.resolve_firmware(offline=offline), selected)
                     fetch.assert_called_once_with(
                         "cloud-hypervisor/edk2", "CLOUDHV.fd",
-                        root / "virtio-villain/firmware", offline=offline)
+                        root / "target/virtio-villain/firmware", offline=offline)
 
     def test_unreadable_installed_firmware_does_not_trigger_download(self):
         with patch.object(Path, "lstat", side_effect=PermissionError("Unreadable firmware")), \

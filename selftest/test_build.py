@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
+FRAMEWORK = (ROOT.parent / "virtio-villain").resolve()
 
 
 def install_build_fixture(root, framework):
@@ -85,7 +85,7 @@ class KernelConfigTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("make"), "Make required for build checks")
 class BuildTests(unittest.TestCase):
-    def test_relocated_selftests_use_the_selected_framework(self):
+    def test_relocated_selftests_use_the_sibling_framework(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             suite = root / "suite"
@@ -96,26 +96,22 @@ class BuildTests(unittest.TestCase):
                 shutil.copyfile(ROOT / "selftest" / f"{name}.py", tests / f"{name}.py")
             (suite / "lib").mkdir()
             shutil.copyfile(ROOT / "lib/boot_image.py", suite / "lib/boot_image.py")
-            alternate = root / "alternate"
-            alternate.symlink_to(FRAMEWORK, target_is_directory=True)
+            (root / "virtio-villain").symlink_to(FRAMEWORK, target_is_directory=True)
             environment = dict(os.environ, PYTHONPATH=str(tests))
-            for selected in (str(alternate), "alternate"):
-                with self.subTest(selected=selected):
-                    environment["VV_ROOT"] = selected
-                    result = subprocess.run([
-                        sys.executable, "-c",
-                        "import importlib\n"
-                        "from pathlib import Path\n"
-                        f"expected = Path({str(FRAMEWORK.resolve())!r})\n"
-                        f"for name in {modules!r}:\n"
-                        "    module = importlib.import_module(name)\n"
-                        "    assert module.FRAMEWORK == expected, name\n"
-                        "import villain\n"
-                        "assert Path(villain.__file__).resolve().parent == "
-                        "expected / 'lib/python/villain'\n",
-                    ], cwd=root, env=environment,
-                        capture_output=True, text=True, timeout=20)
-                    self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([
+                sys.executable, "-c",
+                "import importlib\n"
+                "from pathlib import Path\n"
+                f"expected = Path({str(FRAMEWORK.resolve())!r})\n"
+                f"for name in {modules!r}:\n"
+                "    module = importlib.import_module(name)\n"
+                "    assert module.FRAMEWORK == expected, name\n"
+                "import villain\n"
+                "assert Path(villain.__file__).resolve().parent == "
+                "expected / 'lib/python/villain'\n",
+            ], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_build_and_wrapper_use_the_same_framework_location(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -127,41 +123,36 @@ class BuildTests(unittest.TestCase):
             record = root / "wrapper.json"
             default = suite.parent / "virtio-villain"
             alternate = root / "alternate"
-            for framework in (default, alternate):
-                framework.mkdir()
-                runner = framework / "run"
-                runner.write_text(
-                    "#!/usr/bin/env python3\n"
-                    "import json, sys\n"
-                    "from pathlib import Path\n"
-                    f"Path({str(record)!r}).write_text(json.dumps("
-                    "{'runner': __file__, 'argv': sys.argv[1:]}))\n")
-                runner.chmod(0o755)
+            default.mkdir()
+            runner = default / "run"
+            runner.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                f"Path({str(record)!r}).write_text(json.dumps("
+                "{'runner': __file__, 'argv': sys.argv[1:]}))\n")
+            runner.chmod(0o755)
             environment = dict(os.environ, HOME=str(root / "unrelated-home"))
             environment.pop("VV_ROOT", None)
-            for framework in (default, alternate):
-                with self.subTest(framework=framework):
-                    if framework == alternate:
-                        environment["VV_ROOT"] = str(alternate)
-                    result = subprocess.run([
-                        "make", "--no-print-directory", "-C", str(root),
-                        "-f", str(suite / "Makefile"), "help",
-                    ], env=environment, check=True, capture_output=True,
-                        text=True, timeout=20)
-                    self.assertIn(f"(current: {framework})", result.stdout)
-                    subprocess.run([
-                        str(suite / "run"), "--list",
-                    ], cwd=root, env=environment, check=True,
-                        capture_output=True, text=True, timeout=20)
-                    self.assertEqual(json.loads(record.read_text()), {
-                        "runner": str(framework / "run"),
-                        "argv": ["--suite", str(suite), "--list"]})
             result = subprocess.run([
                 "make", "--no-print-directory", "-C", str(root),
-                "-f", str(suite / "Makefile"), f"VV_ROOT={default}", "help",
+                "-f", str(suite / "Makefile"), "help",
             ], env=environment, check=True, capture_output=True,
                 text=True, timeout=20)
             self.assertIn(f"(current: {default})", result.stdout)
+            subprocess.run([
+                str(suite / "run"), "--list",
+            ], cwd=root, env=environment, check=True,
+                capture_output=True, text=True, timeout=20)
+            self.assertEqual(json.loads(record.read_text()), {
+                "runner": str(default / "run"),
+                "argv": ["--suite", str(suite), "--list"]})
+            result = subprocess.run([
+                "make", "--no-print-directory", "-C", str(root),
+                "-f", str(suite / "Makefile"), f"VV_ROOT={alternate}", "help",
+            ], env=environment, check=True, capture_output=True,
+                text=True, timeout=20)
+            self.assertIn(f"(current: {alternate})", result.stdout)
 
     def test_source_selection_failure_stops_the_build(self):
         with tempfile.TemporaryDirectory() as temporary:
