@@ -298,6 +298,12 @@ class PolicyTests(unittest.TestCase):
              self.assertRaisesRegex(PermissionError, "KVM denied"):
             suite.preflight(args)
 
+    def test_explicit_cloud_backend_overrides_openvmm_filename(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        self.assertIsInstance(module.vmm_backend("/local/openvmm", "ch"),
+                              module.CloudHypervisor)
+
     def test_firmware_is_resolved_once_and_passed_to_workers(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
