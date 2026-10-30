@@ -1,9 +1,13 @@
 # MSHV UAPI suite
 
 Linux MSHV UAPI tests for partition lifecycle and virtual processor operations.
-The suite uses Virtio Villain with Cloud Hypervisor or OpenVMM to run a
-selected Linux kernel beneath nested Hyper-V. It targets x86-64 parent
-partitions and child partitions without isolation.
+The suite uses
+[Virtio Villain](https://github.com/weltling/virtio-villain)
+to run a selected Linux kernel beneath nested Hyper-V through
+[Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor)
+or [OpenVMM](https://github.com/microsoft/openvmm).
+It targets x86-64 parent partitions and child partitions without
+isolation.
 
 ## Quick start
 
@@ -15,17 +19,18 @@ two vCPUs and 2 GiB RAM.
 
 Have the following inputs available before starting.
 
-- A current Virtio Villain checkout.
-- A Cloud Hypervisor executable built with its `mshv` feature and support
-  for nested Hyper-V. Rust and Cargo are needed only if building the VMM.
-  See the [Cloud Hypervisor MSHV guide](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/docs/mshv.md).
+- A current [Virtio Villain](https://github.com/weltling/virtio-villain)
+  checkout.
+- A compatible VMM executable and its UEFI firmware. Choose either
+  [Cloud Hypervisor with MSHV](#cloud-hypervisor-with-mshv) or
+  [OpenVMM with KVM](#openvmm-with-kvm) as described below.
 - A local Linux source tree with MSHV root partition support, or an existing
   compatible x86-64 `bzImage`.
-- The matching [ESP components](#esp-components), either in a readable ESP
-  directory or in an archive. These are not included in this repository.
-- Compatible UEFI firmware. The `edk2-cloud-hypervisor` package supplies
-  `/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd`. Obtain the package from an
-  approved package source, or supply a firmware file separately.
+- The matching [ESP components](#esp-components) in a readable directory.
+  Public Azure Linux RPMs provide these files. Follow the
+  [download instructions](#download-and-extract-the-boot-packages) below.
+
+Rust and Cargo are needed only if building the VMM.
 
 ### 1. Install build and image tools
 
@@ -38,33 +43,26 @@ sudo tdnf install gcc glibc-devel glibc-static make binutils python3 \
   util-linux dosfstools mtools tar gzip
 ```
 
-### 2. Select paths and unpack the ESP components
+### 2. Select the framework and boot component paths
 
 Run the remaining commands from this repository's root. Replace the example
-paths with your checkouts and VMM executable.
+paths with your checkouts. The boot input directory is separate from the
+build output so that `make clean` does not remove downloaded components.
 
 ```sh
 cd /path/to/virtio-villain-mshv
 export VV_ROOT=/path/to/virtio-villain
-export MSHV_VMM=/path/to/cloud-hypervisor
-export MSHV_ESP="$HOME/.local/share/virtio-villain-mshv/esp"
-
-mkdir -p "$MSHV_ESP"
-tar -xzf /path/to/mshv-boot-components.tar.gz -C "$MSHV_ESP"
-
-firmware=/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd
+export MSHV_ESP="$PWD/../mshv-boot-inputs/esp"
 ```
 
-If the ESP files are already available in a readable directory, set
-`MSHV_ESP` to that directory instead of extracting an archive. The ESP
-archive contains only the eight boot files, not firmware or build outputs.
-Change `firmware` if your firmware file is elsewhere.
+Populate this directory using the
+[public boot packages](#download-and-extract-the-boot-packages).
+Select the VMM and its firmware in step 4.
 
 `VV_ROOT` can be omitted when the framework is in a sibling
-`virtio-villain` directory. `MSHV_VMM` can be omitted when the correct
-`cloud-hypervisor` executable is on `PATH`.
+`virtio-villain` directory.
 
-### 3. Build and run
+### 3. Build the appliance and kernel
 
 Build the executable, initramfs and selected kernel in one invocation.
 Kernel sources must already be available locally.
@@ -72,13 +70,7 @@ Kernel sources must already be available locally.
 ```sh
 make -j init initramfs kernel MSHV_SOURCE=/path/to/linux
 ./run --list
-
-./run --firmware "$firmware" --offline --console --timeout 180 ML0001
-./run --firmware "$firmware" --offline --timeout 180
 ```
-
-The first run selects one lifecycle test with live console output. The second
-runs all tests. Both use local firmware without network access.
 
 The default kernel config is `Microsoft/configs/x86/mshv_defconfig` under
 `MSHV_SOURCE`. Kconfig adapts this base config to the source tree and local
@@ -94,57 +86,134 @@ An ELF `vmlinux` image cannot be used for this boot path.
 Nested testing can hang the outer host. A process timeout cannot recover
 that host. Use external recovery for unattended runs.
 
-### OpenVMM on KVM
+### 4. Select a VMM and run
 
-Use an OpenVMM build that supports `--nested-virt` on KVM and its matching
-`MSVM.fd` UEFI firmware. Cloud Hypervisor firmware is not interchangeable
-with OpenVMM firmware. OpenVMM requires an explicit `--firmware` path and
-does not use the Cloud Hypervisor firmware download.
+Both backends use the same test executable, initramfs, MSHV kernel and
+ESP components. They differ in the host hypervisor interface and UEFI
+firmware.
 
-The same ESP components and Linux kernel with MSHV root partition support
-are required. The kernel must include `CONFIG_EFI_STUB=y` and
-`CONFIG_EFI_HANDOVER_PROTOCOL=y` for the GRUB boot path. The host does not
-need `/dev/mshv`. With the executable and initramfs already built, run a
-single test as follows.
+| Requirement | Cloud Hypervisor | OpenVMM |
+| --- | --- | --- |
+| Host interface | `/dev/mshv` | `/dev/kvm` with nested VMX/SVM |
+| VMM build | MSHV backend with nested Hyper-V support | KVM backend with `--nested-virt` |
+| UEFI firmware | Cloud Hypervisor `CLOUDHV.fd` or compatible firmware | OpenVMM `MSVM.fd` |
+| Boot component RPMs | All five packages listed below | All five packages listed below |
+
+#### Cloud Hypervisor with MSHV
+
+Use a Cloud Hypervisor executable built with its `mshv` feature and
+support for nested Hyper-V. The host must provide `/dev/mshv` with read
+and write access for your user. Ordinary nested VMX/SVM support alone is
+not enough for this backend.
+See the
+[Cloud Hypervisor MSHV guide](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/docs/mshv.md).
+
+Obtain `CLOUDHV.fd` from the
+[Cloud Hypervisor edk2 releases](https://github.com/cloud-hypervisor/edk2/releases).
+This firmware is separate from the ESP component RPMs.
 
 ```sh
-export MSHV_ESP=/path/to/mshv-boot-components
-./run --vmm /path/to/openvmm --firmware /path/to/MSVM.fd \
-  --kernel /path/to/bzImage --offline --console --timeout 180 ML0001
+export MSHV_VMM=/path/to/cloud-hypervisor
+firmware=/path/to/CLOUDHV.fd
+
+./run --firmware "$firmware" --offline --console --timeout 180 ML0001
+./run --firmware "$firmware" --offline --timeout 180
 ```
+
+`MSHV_VMM` can be omitted when the correct `cloud-hypervisor` executable
+is on `PATH`. Without an explicit firmware path, Cloud Hypervisor uses
+the [firmware selection](#firmware) described below.
+
+#### OpenVMM with KVM
+
+Use an OpenVMM build that supports `--nested-virt` on KVM and its matching
+`MSVM.fd` UEFI firmware. The host must provide `/dev/kvm` with read and
+write access for your user and have nested VMX/SVM enabled. It does not
+need `/dev/mshv`.
+
+Cloud Hypervisor firmware is not interchangeable with OpenVMM firmware.
+OpenVMM requires an explicit `--firmware` path and does not use the
+Cloud Hypervisor firmware download.
+
+```sh
+export MSHV_VMM=/path/to/openvmm
+firmware=/path/to/MSVM.fd
+
+./run --firmware "$firmware" --offline --console --timeout 180 ML0001
+./run --firmware "$firmware" --offline --timeout 180
+```
+
+For either backend, the first command runs one lifecycle test with live
+console output. The second runs all tests without live VM output.
+Both retain complete logs and use local firmware without network access.
+The GRUB boot path requires `CONFIG_EFI_STUB=y` and
+`CONFIG_EFI_HANDOVER_PROTOCOL=y` in the selected kernel.
 
 The runner selects OpenVMM when the executable name contains `openvmm`.
 Use `--backend openvmm` for a renamed executable or `--backend ch` to force
-Cloud Hypervisor. `MSHV_VMM` can also select the OpenVMM executable.
-The runner enables nested virtualization, boots the private ESP disk
-through UEFI and captures COM1 output.
+Cloud Hypervisor. `--vmm PATH` overrides `MSHV_VMM` for one run.
+Both backends boot the generated ESP disk through UEFI and capture the
+serial console.
 
 ## Boot inputs
 
 ### ESP components
 
-`MSHV_ESP` defaults to `/boot/efi`. The selected directory must contain these
-readable files with exactly this filename case.
+`MSHV_ESP` selects the directory containing the following files from
+Azure Linux 3.0 RPMs. Paths are relative to that directory and must match
+the filename case shown.
 
-```text
-EFI/BOOT/bootx64.efi
-EFI/BOOT/grubx64.efi
-EFI/BOOT/mmx64.efi
-HvLoader.efi
-lxhvloader.dll
-Windows/System32/hvix64.exe
-Windows/System32/hvax64.exe
-Windows/System32/kdstub.dll
+| RPM | Files used by the suite | CH | OpenVMM |
+| --- | --- | --- | --- |
+| `shim` | `EFI/BOOT/bootx64.efi`, `EFI/BOOT/mmx64.efi` | Required | Required |
+| `grub2-efi-binary` | `EFI/BOOT/grubx64.efi` | Required | Required |
+| `hvloader` | `HvLoader.efi` | Required | Required |
+| `mshv-bootloader-lx` | `lxhvloader.dll` | Required | Required |
+| `mshv` | `Windows/System32/hvix64.exe`, `Windows/System32/hvax64.exe`, `Windows/System32/kdstub.dll` | Required | Required |
+
+Keep `mshv` and `mshv-bootloader-lx` at the same version and release.
+Both CPU vendor hypervisor binaries are required.
+`mshv-kd` is not needed because `mshv` supplies `kdstub.dll`.
+
+Shim and GRUB are requirements of the current shared boot image, not
+intrinsic OpenVMM requirements. The suite generates its own boot
+configuration. The RPMs are only extracted, not installed on the host.
+VMM executables, firmware and the Linux kernel are separate inputs.
+
+#### Download and extract the boot packages
+
+Use `curl` and `bsdtar` to download and extract these x86_64 RPMs.
+Run from the suite directory. No repository configuration, package
+installation or RPM database is used.
+
+```sh
+(
+  set -e
+  mkdir -p ../mshv-boot-inputs
+  cd ../mshv-boot-inputs
+  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/Packages/s/shim-16.1-1.azl3.x86_64.rpm
+  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/Packages/g/grub2-efi-binary-2.06-27.azl3.x86_64.rpm
+  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/Packages/h/hvloader-1.0.1-5.azl3.x86_64.rpm
+  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/ms-non-oss/x86_64/Packages/m/mshv-26100.9444.2609032029.1-1.azl3.x86_64.rpm
+  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/ms-non-oss/x86_64/Packages/m/mshv-bootloader-lx-26100.9444.2609032029.1-1.azl3.x86_64.rpm
+
+  mkdir -p root esp
+  for package in *.rpm
+  do
+    bsdtar -xf "$package" -C root
+  done
+  cp -a root/boot/efi/. esp/
+)
+export MSHV_ESP="$PWD/../mshv-boot-inputs/esp"
 ```
 
-The installed component packages are `shim`, `grub2-efi-binary`, `hvloader`,
-`mshv-lxhvloader-fre` and `mshv-fre`. Keep the loader and hypervisor packages
-from a matching build. Both CPU vendor hypervisor binaries are required.
+`root/boot/efi` is inside the extracted payload, not a host ESP.
+The MSHV RPMs are proprietary. Review their license files under
+`mshv-boot-inputs/root/usr/share/licenses` before use.
 
-The full host ESP and its GRUB configuration are not needed. The suite
-generates its own boot configuration for the selected kernel and initramfs.
-It does not install or download ESP components, modify the host ESP or
-elevate privileges.
+The pinned 26100 set failed before Linux in the checked OpenVMM
+configuration. Cloud Hypervisor execution with this set has not been
+checked.
 
 ### Firmware
 
@@ -162,6 +231,10 @@ cached release. The cache is under
 `$HOME/.cache/virtio-villain/firmware` when `XDG_CACHE_HOME` is unset.
 Online fallback checks for the latest release. Download failures do not
 silently select an older version.
+
+OpenVMM always requires `--firmware PATH` pointing to its `MSVM.fd`.
+The installed Cloud Hypervisor firmware and its download cache are not
+used by the OpenVMM backend.
 
 All boot inputs must be nonempty readable regular files. Preflight checks
 their formats before launching tests. These checks do not establish
