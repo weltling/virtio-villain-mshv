@@ -54,6 +54,8 @@ class PolicyTests(unittest.TestCase):
                     with patch.object(module, "resolve_firmware",
                                       return_value=Path("/firmware")), \
                          patch.object(module, "validate_boot_inputs") as validate, \
+                         patch.object(module, "prepare_image",
+                                      return_value=Path("/shared/boot.img")) as prepare, \
                          patch.object(module, "executable"), \
                          patch.object(os, "open", return_value=42), \
                          patch.object(os, "close"), \
@@ -62,27 +64,29 @@ class PolicyTests(unittest.TestCase):
                     self.assertEqual(args.esp, expected)
                     validate.assert_called_once_with(
                         args.kernel, args.initramfs, expected, firmware=Path("/firmware"))
+                    prepare.assert_called_once_with(
+                        (selected or root / "default") / "boot",
+                        args.kernel, args.initramfs, expected, Path("/firmware"))
                     network.assert_not_called()
                     args.workspace = root / "diagnostics"
                     command = suite.build_command(args, ["ML0001"], "token")
-                    self.assertEqual(command[command.index("--esp") + 1], str(expected))
+                    self.assertEqual(command[command.index("--image") + 1], "/shared/boot.img")
 
-    def test_worker_requires_explicit_esp(self):
+    def test_worker_requires_the_prepared_image(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
         errors = io.StringIO()
-        with patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+        with patch.object(module, "prepare_image") as prepare, \
              patch.object(os, "execvp") as execute, \
              contextlib.redirect_stdout(io.StringIO()), \
              contextlib.redirect_stderr(errors), \
              self.assertRaises(SystemExit) as exit:
             suite.execute([
-                "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/initramfs",
-                "--firmware", "/firmware", "--cmdline", "vv.run=token",
+                "--vmm", "/vmm", "--firmware", "/firmware", "--tests", "ML001",
                 "--run-id", "token", "--output", "/output"])
         self.assertEqual(exit.exception.code, 2)
-        self.assertIn("--esp", errors.getvalue())
-        build.assert_not_called()
+        self.assertIn("--image", errors.getvalue())
+        prepare.assert_not_called()
         execute.assert_not_called()
 
     def test_suite_identity_is_independent_of_kernel_source(self):
@@ -187,9 +191,10 @@ class PolicyTests(unittest.TestCase):
                 "--build-dir", str(target), "--initramfs", str(archive),
                 "--esp", "/components", "ML001"])
             self.assertEqual(args.kernel, kernel)
+            args.boot_image = target / "boot/fixture/boot.img"
             args.workspace = target / "results/fixture/artifacts/1-ML001"
             command = suite.build_command(args, ["ML001"], "token")
-            self.assertEqual(command[command.index("--kernel") + 1], str(kernel))
+            self.assertEqual(command[command.index("--image") + 1], str(args.boot_image))
             self.assertEqual(command[command.index("--output") + 1],
                              str(args.workspace / "boot"))
 
@@ -227,6 +232,8 @@ class PolicyTests(unittest.TestCase):
         self.assertIsNone(args.control)
         errors = io.StringIO()
         with patch.object(module, "validate_boot_inputs") as validate, \
+             patch.object(module, "prepare_image",
+                          return_value=Path("/shared/boot.img")) as prepare, \
              patch.object(module, "executable", return_value=args.vmm) as executable, \
              patch.object(os, "open", return_value=42) as opened, \
              patch.object(os, "close") as closed, \
@@ -234,6 +241,9 @@ class PolicyTests(unittest.TestCase):
             suite.preflight(args)
         validate.assert_called_once_with(
             args.kernel, args.initramfs, Path("relative-components").resolve(), firmware=image)
+        prepare.assert_called_once_with(
+            suite.build_spec.context(args.build_dir).target / "boot",
+            args.kernel, args.initramfs, Path("relative-components").resolve(), image)
         executable.assert_called_once_with(args.vmm)
         opened.assert_called_once_with(
             "/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
@@ -245,13 +255,11 @@ class PolicyTests(unittest.TestCase):
             str(ROOT / "lib/suite.py")])
         self.assertEqual(command[command.index("--vmm") + 1], "/local/cloud-hypervisor")
         self.assertEqual(command[command.index("--run-id") + 1], "token")
-        self.assertEqual(command[command.index("--firmware") + 1], str(image))
-        self.assertEqual(command[command.index("--esp") + 1],
-                         str(Path("relative-components").resolve()))
+        self.assertEqual(command[command.index("--firmware") + 1], "/shared/firmware.fd")
+        self.assertEqual(command[command.index("--image") + 1], "/shared/boot.img")
         self.assertEqual(command[command.index("--output") + 1],
                          str(args.workspace / "boot"))
-        self.assertIn("vv.tests=ML001", command[command.index("--cmdline") + 1])
-        self.assertIn("vv.shutdown=host", command[command.index("--cmdline") + 1])
+        self.assertEqual(command[command.index("--tests") + 1], "ML001")
         self.assertTrue(suite.host_shutdown)
 
     def test_external_control_uses_the_same_nested_environment(self):
@@ -266,6 +274,7 @@ class PolicyTests(unittest.TestCase):
                 "--esp", "/components"])
         errors = io.StringIO()
         with patch.object(module, "validate_boot_inputs") as validate, \
+             patch.object(module, "prepare_image", return_value=Path("/shared/boot.img")), \
              patch.object(module, "executable", return_value=args.vmm) as executable, \
              patch.object(os, "open", return_value=42) as opened, \
              patch.object(os, "close") as closed, \
@@ -341,6 +350,8 @@ class PolicyTests(unittest.TestCase):
                     "--firmware", "/local/MSVM.fd", "--offline", "--esp", "/components"])
                 with patch.object(module, "resolve_firmware") as resolve, \
                      patch.object(module, "validate_boot_inputs") as validate, \
+                     patch.object(module, "prepare_image",
+                                  return_value=Path("/shared/boot.img")), \
                      patch.object(module, "executable") as executable, \
                      patch.object(os, "open", return_value=42) as opened, \
                      patch.object(os, "close") as closed:
@@ -355,8 +366,8 @@ class PolicyTests(unittest.TestCase):
                 args.workspace = Path("/diagnostics")
                 command = suite.build_command(args, ["ML0001"], "token")
                 self.assertEqual(command[command.index("--backend") + 1], backend)
-                self.assertEqual(command[command.index("--esp") + 1], "/components")
-                self.assertEqual(command[command.index("--firmware") + 1], "/local/MSVM.fd")
+                self.assertEqual(command[command.index("--image") + 1], "/shared/boot.img")
+                self.assertEqual(command[command.index("--firmware") + 1], "/shared/firmware.fd")
 
     def test_openvmm_uses_prepared_firmware_from_the_selected_output(self):
         suite = appliance.load_suite(ROOT)
@@ -387,6 +398,8 @@ class PolicyTests(unittest.TestCase):
                     args = appliance.parse_args(suite, options)
                     with patch.object(module, "resolve_firmware") as resolve, \
                          patch.object(module, "validate_boot_inputs") as validate, \
+                         patch.object(module, "prepare_image",
+                                      return_value=target / "boot/fixture/boot.img") as prepare, \
                          patch.object(module, "executable"), \
                          patch.object(os, "open", return_value=42) as opened, \
                          patch.object(os, "close"), \
@@ -395,12 +408,15 @@ class PolicyTests(unittest.TestCase):
                     self.assertEqual(args.firmware, firmware)
                     validate.assert_called_once_with(
                         args.kernel, args.initramfs, components, firmware=firmware)
+                    prepare.assert_called_once_with(
+                        target / "boot", args.kernel, args.initramfs, components, firmware)
                     resolve.assert_not_called()
                     network.assert_not_called()
                     opened.assert_called_once_with("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
                     args.workspace = root / "diagnostics"
                     command = suite.build_command(args, ["ML0001"], "token")
-                    self.assertEqual(command[command.index("--firmware") + 1], str(firmware))
+                    self.assertEqual(command[command.index("--firmware") + 1],
+                                     str(target / "boot/fixture/firmware.fd"))
 
     def test_missing_prepared_openvmm_firmware_fails_without_fetching(self):
         suite = appliance.load_suite(ROOT)
@@ -445,39 +461,44 @@ class PolicyTests(unittest.TestCase):
     def test_openvmm_worker_launches_nested_uefi_on_kvm(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        output = Path("/diagnostics/boot")
+        serial = "0123456789abcdef0123456789abcdef"
+        token = serial + "-1-ML0001"
         for binary, backend, status in (
                 ("/local/openvmm", "auto", 0), ("/local/vmm", "openvmm", 1)):
             with self.subTest(binary=binary, status=status), \
-                 patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+                 tempfile.TemporaryDirectory() as work, \
+                 patch.object(module, "prepare_image") as prepare, \
                  patch.object(module.process, "spawn") as spawn, \
                  patch.object(os, "execvp") as execute, \
                  contextlib.redirect_stdout(io.StringIO()):
                 proc = Mock()
                 proc.wait.return_value = status
                 spawn.return_value.__enter__.return_value = (proc, None)
+                output = Path(work) / "boot"
                 with self.assertRaises(SystemExit) as exit:
                     suite.execute([
-                        "--vmm", binary, "--backend", backend, "--kernel", "/kernel",
-                        "--initramfs", "/initramfs", "--firmware", "/MSVM.fd",
-                        "--esp", "/components",
-                        "--cmdline", "vv.tests=ML0001", "--run-id", "fixture",
+                        "--vmm", binary, "--backend", backend, "--image", "/shared/boot.img",
+                        "--firmware", "/shared/firmware.fd",
+                        "--tests", "ML0001", "--run-id", token,
                         "--output", str(output)])
                 self.assertEqual(exit.exception.code, status)
                 proc.wait.assert_called_once_with()
                 execute.assert_not_called()
-                build.assert_called_once_with(
-                    output, Path("/kernel"), Path("/initramfs"),
-                    "vv.tests=ML0001", Path("/components"), firmware=Path("/MSVM.fd"))
+                prepare.assert_not_called()
                 spawn.assert_called_once_with([
                     binary, "--hypervisor", "kvm", "-m", "2G", "-p", "2",
                     "--com1", "stderr", "--nested-virt",
                     "--pcie-root-complex", "rc0,segment=1",
-                    "--uefi", f"firmware={output / 'firmware.fd'},console=com1",
-                    "--disk", "file:/disk,ro",
+                    "--uefi", "firmware=/shared/firmware.fd,console=com1",
+                    "--disk", "file:/shared/boot.img,ro",
+                    "--smbios", f"type=1,serial={serial},version=vv:-1-ML0001,sku=ML0001",
                     "--guest-shutdown-action", "exit", "--guest-reset-action", "exit",
                     "--guest-crash-action", "exit:1"],
                     stdin=subprocess.PIPE, start_new_session=False)
+                self.assertEqual({path.name for path in output.iterdir()}, {"launch.json"})
+                launch = json.loads((output / "launch.json").read_text())
+                self.assertEqual(launch["run_id"], token)
+                self.assertEqual(launch["image"], "/shared/boot.img")
 
     def test_firmware_is_resolved_once_and_passed_to_workers(self):
         suite = appliance.load_suite(ROOT)
@@ -487,35 +508,87 @@ class PolicyTests(unittest.TestCase):
             "--list", "--offline", "--esp", "/components"])
         with patch.object(module, "resolve_firmware", return_value=firmware) as resolve, \
              patch.object(module, "validate_boot_inputs") as validate, \
+             patch.object(module, "prepare_image",
+                          return_value=Path("/shared/boot.img")) as prepare, \
              patch.object(module, "executable"), patch.object(os, "open", return_value=42), \
              patch.object(os, "close"):
             suite.preflight(args)
             for token in ("first", "second"):
                 args.workspace = Path("/diagnostics") / token
                 command = suite.build_command(args, ["ML001"], token)
-                self.assertEqual(command[command.index("--firmware") + 1], str(firmware))
+                self.assertEqual(command[command.index("--firmware") + 1], "/shared/firmware.fd")
+                self.assertEqual(command[command.index("--image") + 1], "/shared/boot.img")
         resolve.assert_called_once_with(None, offline=True)
         validate.assert_called_once_with(
             args.kernel, args.initramfs, Path("/components"), firmware=firmware)
+        prepare.assert_called_once_with(
+            suite.build_spec.context(args.build_dir).target / "boot",
+            args.kernel, args.initramfs, Path("/components"), firmware)
 
-    def test_worker_builds_with_selected_firmware_without_resolving_again(self):
+    def test_worker_uses_the_prepared_image_without_resolving_or_building_again(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        output = Path("/diagnostics/artifacts/1-ML001/boot")
-        with patch.object(module, "resolve_firmware",
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(module, "resolve_firmware",
                           side_effect=AssertionError("Worker must not resolve firmware")), \
-             patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+             patch.object(module, "prepare_image",
+                          side_effect=AssertionError("Worker must not build an image")), \
              patch.object(os, "execvp") as execute, contextlib.redirect_stdout(io.StringIO()):
             suite.execute([
-                "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/initramfs",
-                "--firmware", "/selected/firmware", "--esp", "/components",
-                "--cmdline", "vv.tests=ML001",
-                "--run-id", "fixture", "--output", str(output)])
-        build.assert_called_once_with(
-            output, Path("/kernel"), Path("/initramfs"),
-            "vv.tests=ML001", Path("/components"), firmware=Path("/selected/firmware"))
+                "--vmm", "/vmm", "--image", "/shared/boot.img",
+                "--firmware", "/shared/firmware.fd", "--tests", "ML001",
+                "--run-id", "fixture", "--output", str(Path(work) / "boot")])
         execute.assert_called_once()
-        self.assertEqual(execute.call_args.args[1][2], str(output / "firmware.fd"))
+        self.assertEqual(execute.call_args.args[1][2], "/shared/firmware.fd")
+
+    def test_invalid_runtime_selection_stops_before_launch_or_artifact_creation(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        for token, tests in (
+                ("", "ML001"), ("invalid token", "ML001"), ("token,field", "ML001"),
+                ("a" * 62, "ML001"), ("token", ""), ("token", "M" * 33),
+                ("token", "ML001+MR001"), ("token", "ML001,,MR001"),
+                ("token", ",ML001"), ("token", "ML001,"), ("token", "ML001\n")):
+            with self.subTest(token=token, tests=tests), \
+                 tempfile.TemporaryDirectory() as work, \
+                 patch.object(module.os, "execvp") as execute, \
+                 patch.object(module.process, "spawn") as spawn, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                output = Path(work) / "boot"
+                with self.assertRaises(SystemExit) as exit:
+                    suite.execute([
+                        "--vmm", "/vmm", "--image", "/shared/boot.img",
+                        "--firmware", "/shared/firmware.fd", "--run-id", token,
+                        "--tests", tests, "--output", str(output)])
+                self.assertEqual(exit.exception.code, 2)
+                self.assertFalse(output.exists())
+                execute.assert_not_called()
+                spawn.assert_not_called()
+
+    def test_shared_image_failure_is_one_error_before_parallel_launch(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as work:
+            image = Path(work) / "image"
+            image.write_bytes(b"image")
+            with patch.object(appliance, "load_suite", return_value=suite), \
+                 patch.object(appliance, "catalog", return_value={"ML001": "Fixture"}), \
+                 patch.object(module, "validate_boot_inputs"), \
+                 patch.object(module, "executable"), \
+                 patch.object(os, "open", return_value=17), patch.object(os, "close"), \
+                 patch.object(module, "prepare_image",
+                              side_effect=RuntimeError("Shared image failed")) as prepare, \
+                 patch.object(appliance, "launch") as launch, \
+                 contextlib.redirect_stderr(errors):
+                status = appliance.main([
+                    "--suite", str(ROOT), "--kernel", str(image), "--initramfs", str(image),
+                    "--jobs", "8", "--firmware", str(image), "--esp", "/components"])
+            prepare.assert_called_once()
+            launch.assert_not_called()
+        self.assertEqual(status, 2)
+        self.assertEqual(errors.getvalue().count("[INFRA]"), 1)
+        self.assertIn("Shared image failed", errors.getvalue())
 
     def test_firmware_resolution_failure_is_one_infrastructure_error(self):
         suite = appliance.load_suite(ROOT)
@@ -547,7 +620,9 @@ class PolicyTests(unittest.TestCase):
         module = sys.modules[type(suite).__module__]
         with patch.object(appliance, "load_suite", return_value=suite), \
              patch.object(module, "resolve_firmware") as resolve, \
+             patch.object(module, "prepare_image") as prepare, \
              contextlib.redirect_stdout(io.StringIO()):
             status = appliance.main(["--suite", str(ROOT), "--list", "--offline"])
         self.assertEqual(status, 0)
         resolve.assert_not_called()
+        prepare.assert_not_called()
