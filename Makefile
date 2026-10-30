@@ -63,7 +63,7 @@ help:
 	@echo ""
 	@echo "Relative paths are resolved from this suite directory."
 	@echo "clean also removes cached boot components, kernel caches and saved results in TARGET."
-	@echo "Keep reusable boot inputs outside TARGET and select them with MSHV_ESP."
+	@echo "Use ./run --esp PATH to select extracted boot components."
 	@echo "Use ./run --help for execution options."
 
 .PHONY: init initramfs mshv mshv-initramfs kernel clean selftest lint help

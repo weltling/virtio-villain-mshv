@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Assemble a private UEFI disk from installed Hyper-V boot components."""
+"""Assemble a UEFI disk from extracted Hyper-V boot components."""
 
 import argparse
 import gzip
@@ -18,7 +18,6 @@ import tempfile
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
-ESP = Path(os.environ.get("MSHV_ESP", "/boot/efi"))
 FIRMWARE = Path("/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd")
 FIRMWARE_REPOSITORY = "cloud-hypervisor/edk2"
 FIRMWARE_ASSET = "CLOUDHV.fd"
@@ -178,7 +177,7 @@ def _validate_initramfs(stream, size):
             pass
 
 
-def validate_boot_inputs(kernel, initramfs, esp=ESP, firmware=FIRMWARE):
+def validate_boot_inputs(kernel, initramfs, esp, firmware=FIRMWARE):
     checks = [
         ("bzImage kernel", kernel, _validate_kernel),
         ("gzip/newc initramfs", initramfs, _validate_initramfs),
@@ -258,7 +257,7 @@ def resolve_firmware(firmware=None, *, offline=False):
     return FIRMWARE
 
 
-def build_image(output, kernel, initramfs, cmdline, esp=ESP, firmware=FIRMWARE):
+def build_image(output, kernel, initramfs, cmdline, esp, firmware=FIRMWARE):
     validate_boot_inputs(kernel, initramfs, esp, firmware)
     config = grub_config(cmdline)
     from villain.images import create_raw
@@ -319,7 +318,8 @@ def main():
     parser.add_argument("--cmdline", default=(
         "console=ttyS0,115200 rdinit=/init panic=-1 loglevel=7 "
         "no5lvl intel_iommu=off amd_iommu=off vv.run=image-probe vv.tests=ML001"))
-    parser.add_argument("--esp", type=Path, default=ESP)
+    parser.add_argument("--esp", type=Path, required=True,
+                        help="Directory containing extracted boot components")
     parser.add_argument("--firmware", type=Path,
                         help=f"Local firmware override (otherwise prefer {FIRMWARE})")
     parser.add_argument("--offline", action="store_true",

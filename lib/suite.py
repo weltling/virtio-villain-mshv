@@ -30,7 +30,6 @@ class MshvSuite(Suite):
     def add_arguments(self, parser):
         parser.epilog = (
             "MSHV_VMM selects the default Cloud Hypervisor or OpenVMM executable. "
-            "MSHV_ESP selects readable boot components (default /boot/efi). "
             "OpenVMM uses KVM and requires --firmware with MSVM.fd. "
             f"Cloud Hypervisor prefers installed UEFI firmware at {FIRMWARE}, otherwise download "
             "the latest cloud-hypervisor/edk2 CLOUDHV.fd with SHA256 verification. "
@@ -42,10 +41,15 @@ class MshvSuite(Suite):
                             help="VMM backend (default: OpenVMM when its name contains "
                             "'openvmm', otherwise Cloud Hypervisor)")
         parser.add_argument("--firmware", type=Path, help="Explicit local UEFI firmware")
+        parser.add_argument("--esp", type=Path,
+                            help="Boot component directory (required except with --list)")
         parser.add_argument("--offline", action="store_true",
                             help="Use installed or cached firmware without network access")
 
     def preflight(self, args):
+        if args.esp is None:
+            raise RuntimeError("--esp PATH is required to select the boot component directory")
+        args.esp = args.esp.resolve()
         backend = vmm_backend(args.vmm, args.backend)
         if isinstance(backend, OpenVmm):
             if args.firmware is None:
@@ -53,7 +57,7 @@ class MshvSuite(Suite):
             args.firmware = args.firmware.resolve()
         else:
             args.firmware = resolve_firmware(args.firmware, offline=args.offline)
-        validate_boot_inputs(args.kernel, args.initramfs, firmware=args.firmware)
+        validate_boot_inputs(args.kernel, args.initramfs, args.esp, firmware=args.firmware)
         executable(args.vmm)
         device = "/dev/kvm" if isinstance(backend, OpenVmm) else "/dev/mshv"
         fd = os.open(device, os.O_RDWR | os.O_CLOEXEC)
@@ -65,6 +69,7 @@ class MshvSuite(Suite):
         return self.execution_command([
             "--vmm", args.vmm, "--backend", args.backend, "--kernel", str(args.kernel),
             "--initramfs", str(args.initramfs), "--firmware", str(args.firmware),
+            "--esp", str(args.esp),
             "--cmdline", cmdline, "--run-id", run_id,
             "--output", str(args.workspace / "boot")])
 
@@ -75,6 +80,7 @@ class MshvSuite(Suite):
         parser.add_argument("--kernel", required=True, type=Path)
         parser.add_argument("--initramfs", required=True, type=Path)
         parser.add_argument("--firmware", required=True, type=Path)
+        parser.add_argument("--esp", required=True, type=Path)
         parser.add_argument("--cmdline", required=True)
         parser.add_argument("--run-id", required=True)
         parser.add_argument("--output", required=True, type=Path)
@@ -83,7 +89,7 @@ class MshvSuite(Suite):
             parser.error("Invalid run identifier")
         output = args.output
         disk = build_image(output, args.kernel, args.initramfs, args.cmdline,
-                           firmware=args.firmware)
+                           args.esp, firmware=args.firmware)
         backend = vmm_backend(args.vmm, args.backend)
         if isinstance(backend, OpenVmm):
             command = backend.build_launch_cmd(
