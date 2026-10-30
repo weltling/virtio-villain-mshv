@@ -22,28 +22,55 @@ from test_build import install_build_fixture  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
-    def test_preflight_requires_explicit_esp_before_firmware_resolution(self):
+    def test_missing_prepared_esp_fails_without_fetching(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        with patch.dict(os.environ, {"MSHV_ESP": "/ignored/components"}):
-            args = appliance.parse_args(suite, ["--list"])
+        with tempfile.TemporaryDirectory() as work:
+            args = appliance.parse_args(suite, ["--list", "--build-dir", work])
             with patch.object(module, "resolve_firmware") as resolve, \
                  patch.object(module, "validate_boot_inputs") as validate, \
                  patch.object(module, "executable") as executable, \
                  patch.object(os, "open") as opened, \
-                 self.assertRaisesRegex(RuntimeError, "--esp PATH is required"):
+                 self.assertRaisesRegex(RuntimeError, "No prepared boot components.*make esp"):
                 suite.preflight(args)
         resolve.assert_not_called()
         validate.assert_not_called()
         executable.assert_not_called()
         opened.assert_not_called()
 
+    def test_prepared_esp_follows_the_selected_build_output(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            for selected in (None, root / "custom"):
+                with self.subTest(selected=selected), \
+                     patch.dict(os.environ, {"TARGET": str(root / "default")}):
+                    options = [] if selected is None else ["--build-dir", str(selected)]
+                    args = appliance.parse_args(suite, ["--list", *options])
+                    expected = (selected or root / "default") / "mshv-boot-inputs/esp"
+                    expected.mkdir(parents=True)
+                    with patch.object(module, "resolve_firmware",
+                                      return_value=Path("/firmware")), \
+                         patch.object(module, "validate_boot_inputs") as validate, \
+                         patch.object(module, "executable"), \
+                         patch.object(os, "open", return_value=42), \
+                         patch.object(os, "close"), \
+                         patch("urllib.request.urlopen") as network:
+                        suite.preflight(args)
+                    self.assertEqual(args.esp, expected)
+                    validate.assert_called_once_with(
+                        args.kernel, args.initramfs, expected, firmware=Path("/firmware"))
+                    network.assert_not_called()
+                    args.workspace = root / "diagnostics"
+                    command = suite.build_command(args, ["ML0001"], "token")
+                    self.assertEqual(command[command.index("--esp") + 1], str(expected))
+
     def test_worker_requires_explicit_esp(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
         errors = io.StringIO()
-        with patch.dict(os.environ, {"MSHV_ESP": "/ignored/components"}), \
-             patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+        with patch.object(module, "build_image", return_value=Path("/disk")) as build, \
              patch.object(os, "execvp") as execute, \
              contextlib.redirect_stdout(io.StringIO()), \
              contextlib.redirect_stderr(errors), \
@@ -123,7 +150,6 @@ class PolicyTests(unittest.TestCase):
         for expected in ("MSHV_VMM", "--esp", "CLOUDHV_EFI.fd", "make help",
                          "--kernel", "--firmware", "--offline", "SHA256"):
             self.assertIn(expected, text)
-        self.assertNotIn("MSHV_ESP", text)
         self.assertNotIn("/boot/efi", text)
 
     def test_default_kernel_matches_the_suite_build_output(self):

@@ -91,8 +91,7 @@ def boot_inputs(root):
 class FirmwareTests(unittest.TestCase):
     def test_standalone_builder_requires_explicit_esp(self):
         errors = io.StringIO()
-        with patch.dict(os.environ, {"MSHV_ESP": "/ignored/components"}), \
-             patch.object(sys, "argv", [
+        with patch.object(sys, "argv", [
                  "boot_image.py", "--output", "/output", "--kernel", "/kernel",
                  "--initramfs", "/archive", "--firmware", "/firmware"]), \
              patch.object(boot_image, "resolve_firmware") as resolve, \
