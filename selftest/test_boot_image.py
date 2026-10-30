@@ -89,6 +89,24 @@ def boot_inputs(root):
 
 
 class FirmwareTests(unittest.TestCase):
+    def test_standalone_builder_requires_explicit_esp(self):
+        errors = io.StringIO()
+        with patch.dict(os.environ, {"MSHV_ESP": "/ignored/components"}), \
+             patch.object(sys, "argv", [
+                 "boot_image.py", "--output", "/output", "--kernel", "/kernel",
+                 "--initramfs", "/archive", "--firmware", "/firmware"]), \
+             patch.object(boot_image, "resolve_firmware") as resolve, \
+             patch.object(boot_image, "build_image",
+                          return_value=Path("/output/boot.img")) as build, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(errors), \
+             self.assertRaises(SystemExit) as exit:
+            boot_image.main()
+        self.assertEqual(exit.exception.code, 2)
+        self.assertIn("--esp", errors.getvalue())
+        resolve.assert_not_called()
+        build.assert_not_called()
+
     def test_installed_firmware_prevents_network_and_cache_access(self):
         with tempfile.TemporaryDirectory() as work:
             installed = Path(work) / "installed.fd"
@@ -147,13 +165,14 @@ class FirmwareTests(unittest.TestCase):
             with patch.object(sys, "argv", [
                     "boot_image.py", "--output", str(output), "--offline",
                     "--kernel", "/kernel", "--initramfs", "/archive",
-                    "--firmware", str(firmware)]), \
+                    "--esp", "/components", "--firmware", str(firmware)]), \
                  patch.object(boot_image, "resolve_firmware", return_value=firmware) as resolve, \
                  patch.object(boot_image, "build_image",
                               return_value=output / "boot.img") as build, \
                  contextlib.redirect_stdout(io.StringIO()):
                 boot_image.main()
             resolve.assert_called_once_with(firmware, offline=True)
+            self.assertEqual(build.call_args.args[-2], Path("/components"))
             self.assertEqual(build.call_args.args[-1], firmware)
 
     def test_standalone_builder_uses_recorded_kernel_and_matching_archive(self):
@@ -167,7 +186,8 @@ class FirmwareTests(unittest.TestCase):
             firmware = Path(work) / "firmware"
             with patch.object(sys, "argv", [
                     "boot_image.py", "--output", str(output),
-                    "--build-dir", str(target), "--firmware", str(firmware)]), \
+                    "--build-dir", str(target), "--esp", "/components",
+                    "--firmware", str(firmware)]), \
                  patch.object(boot_image, "build_image",
                               return_value=output / "boot.img") as build, \
                  contextlib.redirect_stdout(io.StringIO()):
@@ -310,7 +330,7 @@ class BootImageTests(unittest.TestCase):
         output = Path("/diagnostics/artifacts/1-ML001/boot")
         arguments = [
             "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
-            "--firmware", "/selected/firmware",
+            "--esp", "/components", "--firmware", "/selected/firmware",
             "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test",
             "--output", str(output)]
         with patch.object(module, "build_image", return_value=output / "boot.img") as build, \
@@ -322,7 +342,7 @@ class BootImageTests(unittest.TestCase):
             suite.execute(arguments)
         build.assert_called_once_with(
             output, Path("/kernel"), Path("/archive"), "vv.run=launcher-test",
-            firmware=Path("/selected/firmware"))
+            Path("/components"), firmware=Path("/selected/firmware"))
         command = execute.call_args.args[1]
         self.assertEqual(execute.call_args.args[0], "/vmm")
         self.assertEqual(command, [
@@ -336,7 +356,7 @@ class BootImageTests(unittest.TestCase):
         module = sys.modules[type(suite).__module__]
         arguments = [
             "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
-            "--firmware", "/selected/firmware",
+            "--esp", "/components", "--firmware", "/selected/firmware",
             "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test",
             "--output", "/diagnostics/artifacts/1-ML001/boot"]
         with patch.object(module, "build_image", side_effect=RuntimeError("Builder failed")), \
@@ -367,7 +387,8 @@ class BootImageTests(unittest.TestCase):
             kernel.write_bytes(b"\x7fELF")
             output = root / "image"
             with self.assertRaisesRegex(RuntimeError, "bzImage"):
-                boot_image.build_image(output, kernel, root / "archive", "vv.run=token")
+                boot_image.build_image(
+                    output, kernel, root / "archive", "vv.run=token", root / "esp")
             self.assertFalse(output.exists())
 
     def test_component_permission_error_is_not_elevated(self):
@@ -463,7 +484,7 @@ class BootImageTests(unittest.TestCase):
             vmm.chmod(0o755)
             for mode in ("default", "build-dir", "output"):
                 with self.subTest(mode=mode), \
-                     patch.dict(os.environ, {"MSHV_ESP": str(inputs["esp"]), "TARGET": "target"}):
+                     patch.dict(os.environ, {"TARGET": "target"}):
                     suite = load_suite(source)
                     options = [] if mode == "default" else ["--build-dir", "selected-build"]
                     if mode == "output":
@@ -471,6 +492,7 @@ class BootImageTests(unittest.TestCase):
                     args = appliance.parse_args(suite, [
                         "--kernel", str(inputs["kernel"]),
                         "--initramfs", str(inputs["initramfs"]),
+                        "--esp", str(inputs["esp"]),
                         "--firmware", str(inputs["firmware"]),
                         "--vmm", str(vmm), *options])
                     with contextlib.redirect_stdout(io.StringIO()) as captured:

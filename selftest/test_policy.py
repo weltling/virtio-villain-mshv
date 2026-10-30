@@ -22,6 +22,41 @@ from test_build import install_build_fixture  # noqa: E402
 
 
 class PolicyTests(unittest.TestCase):
+    def test_preflight_requires_explicit_esp_before_firmware_resolution(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        with patch.dict(os.environ, {"MSHV_ESP": "/ignored/components"}):
+            args = appliance.parse_args(suite, ["--list"])
+            with patch.object(module, "resolve_firmware") as resolve, \
+                 patch.object(module, "validate_boot_inputs") as validate, \
+                 patch.object(module, "executable") as executable, \
+                 patch.object(os, "open") as opened, \
+                 self.assertRaisesRegex(RuntimeError, "--esp PATH is required"):
+                suite.preflight(args)
+        resolve.assert_not_called()
+        validate.assert_not_called()
+        executable.assert_not_called()
+        opened.assert_not_called()
+
+    def test_worker_requires_explicit_esp(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        errors = io.StringIO()
+        with patch.dict(os.environ, {"MSHV_ESP": "/ignored/components"}), \
+             patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+             patch.object(os, "execvp") as execute, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(errors), \
+             self.assertRaises(SystemExit) as exit:
+            suite.execute([
+                "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/initramfs",
+                "--firmware", "/firmware", "--cmdline", "vv.run=token",
+                "--run-id", "token", "--output", "/output"])
+        self.assertEqual(exit.exception.code, 2)
+        self.assertIn("--esp", errors.getvalue())
+        build.assert_not_called()
+        execute.assert_not_called()
+
     def test_suite_identity_is_independent_of_kernel_source(self):
         with patch.dict(os.environ, {"MSHV_SOURCE": "/nonexistent/kernel/source"}):
             suite = appliance.load_suite(ROOT)
@@ -85,9 +120,11 @@ class PolicyTests(unittest.TestCase):
             appliance.main(["--suite", str(ROOT), "--help"])
         self.assertEqual(exit.exception.code, 0)
         text = " ".join(output.getvalue().split())
-        for expected in ("MSHV_VMM", "MSHV_ESP", "CLOUDHV_EFI.fd", "make help",
+        for expected in ("MSHV_VMM", "--esp", "CLOUDHV_EFI.fd", "make help",
                          "--kernel", "--firmware", "--offline", "SHA256"):
             self.assertIn(expected, text)
+        self.assertNotIn("MSHV_ESP", text)
+        self.assertNotIn("/boot/efi", text)
 
     def test_default_kernel_matches_the_suite_build_output(self):
         suite = appliance.load_suite(ROOT)
@@ -106,7 +143,8 @@ class PolicyTests(unittest.TestCase):
             (target / "kernel-result.json").write_text(json.dumps({
                 "image": str(kernel), "arch": "x86_64", "format": "bzImage"}))
             args = appliance.parse_args(suite, [
-                "--build-dir", str(target), "--initramfs", str(archive), "ML001"])
+                "--build-dir", str(target), "--initramfs", str(archive),
+                "--esp", "/components", "ML001"])
             self.assertEqual(args.kernel, kernel)
             args.workspace = target / "mshv/results/fixture/artifacts/1-ML001"
             command = suite.build_command(args, ["ML001"], "token")
@@ -140,6 +178,7 @@ class PolicyTests(unittest.TestCase):
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
                 "--vmm", "/local/cloud-hypervisor", "--firmware", str(image),
+                "--esp", "relative-components",
                 "--jobs", "16", "ML001"])
             args.workspace = Path(work) / "diagnostics/artifacts/1-ML001"
         self.assertEqual(args.jobs, 16)
@@ -152,7 +191,8 @@ class PolicyTests(unittest.TestCase):
              patch.object(os, "close") as closed, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
-        validate.assert_called_once_with(args.kernel, args.initramfs, firmware=image)
+        validate.assert_called_once_with(
+            args.kernel, args.initramfs, Path("relative-components").resolve(), firmware=image)
         executable.assert_called_once_with(args.vmm)
         opened.assert_called_once_with(
             "/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
@@ -165,6 +205,8 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(command[command.index("--vmm") + 1], "/local/cloud-hypervisor")
         self.assertEqual(command[command.index("--run-id") + 1], "token")
         self.assertEqual(command[command.index("--firmware") + 1], str(image))
+        self.assertEqual(command[command.index("--esp") + 1],
+                         str(Path("relative-components").resolve()))
         self.assertEqual(command[command.index("--output") + 1],
                          str(args.workspace / "boot"))
         self.assertIn("vv.tests=ML001", command[command.index("--cmdline") + 1])
@@ -179,7 +221,8 @@ class PolicyTests(unittest.TestCase):
             image.write_bytes(b"image")
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
-                "--control", "/external/control", "--firmware", str(image)])
+                "--control", "/external/control", "--firmware", str(image),
+                "--esp", "/components"])
         errors = io.StringIO()
         with patch.object(module, "validate_boot_inputs") as validate, \
              patch.object(module, "executable", return_value=args.vmm) as executable, \
@@ -187,7 +230,8 @@ class PolicyTests(unittest.TestCase):
              patch.object(os, "close") as closed, \
              contextlib.redirect_stderr(errors):
             suite.preflight(args)
-        validate.assert_called_once_with(args.kernel, args.initramfs, firmware=image)
+        validate.assert_called_once_with(
+            args.kernel, args.initramfs, Path("/components"), firmware=image)
         executable.assert_called_once_with(args.vmm)
         opened.assert_called_once_with("/dev/mshv", os.O_RDWR | os.O_CLOEXEC)
         closed.assert_called_once_with(42)
@@ -210,8 +254,8 @@ class PolicyTests(unittest.TestCase):
                  contextlib.redirect_stderr(errors):
                 status = appliance.main([
                     "--suite", str(ROOT), "--kernel", str(image), "--initramfs", str(image),
-                    "--jobs", "16", "--firmware", str(image)])
-            validate.assert_called_once_with(image, image, firmware=image)
+                    "--jobs", "16", "--firmware", str(image), "--esp", "/components"])
+            validate.assert_called_once_with(image, image, Path("/components"), firmware=image)
             opened.assert_not_called()
             launch.assert_not_called()
         self.assertEqual(status, 2)
@@ -226,12 +270,13 @@ class PolicyTests(unittest.TestCase):
             image.write_bytes(b"image")
             args = appliance.parse_args(suite, [
                 "--kernel", str(image), "--initramfs", str(image),
-                "--vmm", str(Path(work) / "missing-vmm"), "--firmware", str(image)])
+                "--vmm", str(Path(work) / "missing-vmm"), "--firmware", str(image),
+                "--esp", "/components"])
             with patch.object(module, "validate_boot_inputs") as validate, \
                  patch.object(os, "open") as opened, \
                  self.assertRaisesRegex(RuntimeError, "Executable not found"):
                 suite.preflight(args)
-            validate.assert_called_once_with(image, image, firmware=image)
+            validate.assert_called_once_with(image, image, Path("/components"), firmware=image)
             opened.assert_not_called()
 
     def test_default_nested_boot_needs_no_launcher_selection(self):
@@ -259,7 +304,7 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(binary=binary):
                 args = appliance.parse_args(suite, [
                     "--list", "--vmm", binary, "--backend", backend,
-                    "--firmware", "/local/MSVM.fd", "--offline"])
+                    "--firmware", "/local/MSVM.fd", "--offline", "--esp", "/components"])
                 with patch.object(module, "resolve_firmware") as resolve, \
                      patch.object(module, "validate_boot_inputs") as validate, \
                      patch.object(module, "executable") as executable, \
@@ -268,18 +313,21 @@ class PolicyTests(unittest.TestCase):
                     suite.preflight(args)
                 resolve.assert_not_called()
                 validate.assert_called_once_with(
-                    args.kernel, args.initramfs, firmware=Path("/local/MSVM.fd"))
+                    args.kernel, args.initramfs, Path("/components"),
+                    firmware=Path("/local/MSVM.fd"))
                 executable.assert_called_once_with(binary)
                 opened.assert_called_once_with("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
                 closed.assert_called_once_with(42)
                 args.workspace = Path("/diagnostics")
                 command = suite.build_command(args, ["ML0001"], "token")
                 self.assertEqual(command[command.index("--backend") + 1], backend)
+                self.assertEqual(command[command.index("--esp") + 1], "/components")
 
     def test_openvmm_requires_its_own_firmware(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        args = appliance.parse_args(suite, ["--list", "--vmm", "/local/openvmm"])
+        args = appliance.parse_args(suite, [
+            "--list", "--vmm", "/local/openvmm", "--esp", "/components"])
         with patch.object(module, "resolve_firmware") as resolve, \
              patch.object(os, "open") as opened, \
              self.assertRaisesRegex(RuntimeError, "OpenVMM requires --firmware"):
@@ -291,7 +339,8 @@ class PolicyTests(unittest.TestCase):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
         args = appliance.parse_args(suite, [
-            "--list", "--vmm", "openvmm", "--firmware", "/local/MSVM.fd"])
+            "--list", "--vmm", "openvmm", "--firmware", "/local/MSVM.fd",
+            "--esp", "/components"])
         with patch.object(module, "validate_boot_inputs"), \
              patch.object(module, "executable"), \
              patch.object(os, "open", side_effect=PermissionError("KVM denied")), \
@@ -322,6 +371,7 @@ class PolicyTests(unittest.TestCase):
                     suite.execute([
                         "--vmm", binary, "--backend", backend, "--kernel", "/kernel",
                         "--initramfs", "/initramfs", "--firmware", "/MSVM.fd",
+                        "--esp", "/components",
                         "--cmdline", "vv.tests=ML0001", "--run-id", "fixture",
                         "--output", str(output)])
                 self.assertEqual(exit.exception.code, status)
@@ -329,7 +379,7 @@ class PolicyTests(unittest.TestCase):
                 execute.assert_not_called()
                 build.assert_called_once_with(
                     output, Path("/kernel"), Path("/initramfs"),
-                    "vv.tests=ML0001", firmware=Path("/MSVM.fd"))
+                    "vv.tests=ML0001", Path("/components"), firmware=Path("/MSVM.fd"))
                 spawn.assert_called_once_with([
                     binary, "--hypervisor", "kvm", "-m", "2G", "-p", "2",
                     "--com1", "stderr", "--nested-virt",
@@ -343,7 +393,8 @@ class PolicyTests(unittest.TestCase):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
         firmware = Path("/cache/verified/firmware.fd")
-        args = appliance.parse_args(suite, ["--list", "--offline"])
+        args = appliance.parse_args(suite, [
+            "--list", "--offline", "--esp", "/components"])
         with patch.object(module, "resolve_firmware", return_value=firmware) as resolve, \
              patch.object(module, "validate_boot_inputs") as validate, \
              patch.object(module, "executable"), patch.object(os, "open", return_value=42), \
@@ -354,7 +405,8 @@ class PolicyTests(unittest.TestCase):
                 command = suite.build_command(args, ["ML001"], token)
                 self.assertEqual(command[command.index("--firmware") + 1], str(firmware))
         resolve.assert_called_once_with(None, offline=True)
-        validate.assert_called_once_with(args.kernel, args.initramfs, firmware=firmware)
+        validate.assert_called_once_with(
+            args.kernel, args.initramfs, Path("/components"), firmware=firmware)
 
     def test_worker_builds_with_selected_firmware_without_resolving_again(self):
         suite = appliance.load_suite(ROOT)
@@ -366,11 +418,12 @@ class PolicyTests(unittest.TestCase):
              patch.object(os, "execvp") as execute, contextlib.redirect_stdout(io.StringIO()):
             suite.execute([
                 "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/initramfs",
-                "--firmware", "/selected/firmware", "--cmdline", "vv.tests=ML001",
+                "--firmware", "/selected/firmware", "--esp", "/components",
+                "--cmdline", "vv.tests=ML001",
                 "--run-id", "fixture", "--output", str(output)])
         build.assert_called_once_with(
             output, Path("/kernel"), Path("/initramfs"),
-            "vv.tests=ML001", firmware=Path("/selected/firmware"))
+            "vv.tests=ML001", Path("/components"), firmware=Path("/selected/firmware"))
         execute.assert_called_once()
         self.assertEqual(execute.call_args.args[1][2], str(output / "firmware.fd"))
 
@@ -391,7 +444,7 @@ class PolicyTests(unittest.TestCase):
                  contextlib.redirect_stderr(errors):
                 status = appliance.main([
                     "--suite", str(ROOT), "--kernel", str(image), "--initramfs", str(image),
-                    "--jobs", "16"])
+                    "--jobs", "16", "--esp", "/components"])
             validate.assert_not_called()
             opened.assert_not_called()
             launch.assert_not_called()
