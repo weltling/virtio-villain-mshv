@@ -27,8 +27,7 @@ Have the following inputs available before starting.
 - A local Linux source tree with MSHV root partition support, or an existing
   compatible x86-64 `bzImage`.
 - The matching [ESP components](#esp-components) in a readable directory.
-  Public Azure Linux RPMs provide these files. Follow the
-  [download instructions](#download-and-extract-the-boot-packages) below.
+  `make esp` obtains these files from public Azure Linux RPMs.
 
 Rust and Cargo are needed only if building the VMM.
 
@@ -40,7 +39,7 @@ The static C library is required to link the test executable.
 ```sh
 sudo tdnf install gcc glibc-devel glibc-static make binutils python3 \
   flex bison bc elfutils-libelf-devel openssl-devel zlib-devel dwarves \
-  util-linux dosfstools mtools tar gzip
+  util-linux dosfstools mtools tar gzip libarchive
 ```
 
 ### 2. Select the framework checkout
@@ -53,9 +52,6 @@ cd /path/to/virtio-villain-mshv
 export VV_ROOT=/path/to/virtio-villain
 ```
 
-Download and extract the
-[public boot packages](#download-and-extract-the-boot-packages)
-under `target/mshv-boot-inputs`.
 Select the VMM and its firmware in step 4.
 
 `VV_ROOT` can be omitted when the framework is in a sibling
@@ -63,10 +59,11 @@ Select the VMM and its firmware in step 4.
 
 ### 3. Build the appliance and kernel
 
-Build the executable, initramfs and selected kernel in one invocation.
-Kernel sources must already be available locally.
+Prepare the boot files, then build the executable, initramfs and selected
+kernel. Kernel sources must already be available locally.
 
 ```sh
+make esp
 make -j init initramfs kernel MSHV_SOURCE=/path/to/linux
 ./run --list
 ```
@@ -115,10 +112,8 @@ This firmware is separate from the ESP component RPMs.
 export MSHV_VMM=/path/to/cloud-hypervisor
 firmware=/path/to/CLOUDHV.fd
 
-./run --esp target/mshv-boot-inputs/esp --firmware "$firmware" \
-  --offline --console --timeout 180 ML0001
-./run --esp target/mshv-boot-inputs/esp --firmware "$firmware" \
-  --offline --timeout 180
+./run --firmware "$firmware" --offline --console --timeout 180 ML0001
+./run --firmware "$firmware" --offline --timeout 180
 ```
 
 `MSHV_VMM` can be omitted when the correct `cloud-hypervisor` executable
@@ -140,10 +135,8 @@ Cloud Hypervisor firmware download.
 export MSHV_VMM=/path/to/openvmm
 firmware=/path/to/MSVM.fd
 
-./run --esp target/mshv-boot-inputs/esp --firmware "$firmware" \
-  --offline --console --timeout 180 ML0001
-./run --esp target/mshv-boot-inputs/esp --firmware "$firmware" \
-  --offline --timeout 180
+./run --firmware "$firmware" --offline --console --timeout 180 ML0001
+./run --firmware "$firmware" --offline --timeout 180
 ```
 
 For either backend, the first command runs one lifecycle test with live
@@ -162,10 +155,20 @@ serial console.
 
 ### ESP components
 
-`--esp PATH` selects the directory containing the following files from
-Azure Linux 3.0 RPMs. Paths are relative to that directory and must match
-the filename case shown. The argument is required for execution, but not
-for `--list` or `--help`. There is no implicit boot component directory.
+`make esp` downloads pinned Azure Linux 3.0 RPMs, verifies their SHA256
+and extracts the boot files under `target/mshv-boot-inputs/esp`.
+Repeated calls reuse verified local files. No repositories are configured
+and no packages are installed. Extraction requires `bsdtar`, supplied by
+`libarchive` on Azure Linux.
+
+The runner uses this local directory by default and never fetches boot
+components. `--esp PATH` selects another local directory.
+With `--build-dir custom`, the default is `custom/mshv-boot-inputs/esp`.
+Prepare it with `make esp TARGET=custom`. Missing or invalid inputs are
+errors, not download triggers. Help and test listing need no boot files.
+
+Paths below are relative to the boot component directory and must match
+the filename case shown.
 
 | RPM | Files used by the suite | CH | OpenVMM |
 | --- | --- | --- | --- |
@@ -184,35 +187,9 @@ intrinsic OpenVMM requirements. The suite generates its own boot
 configuration. The RPMs are only extracted, not installed on the host.
 VMM executables, firmware and the Linux kernel are separate inputs.
 
-#### Download and extract the boot packages
-
-Use `curl` and `bsdtar` to download and extract these x86_64 RPMs.
-Run from the suite directory. No repository configuration, package
-installation or RPM database is used.
-
-```sh
-(
-  set -e
-  mkdir -p target/mshv-boot-inputs
-  cd target/mshv-boot-inputs
-  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/Packages/s/shim-16.1-1.azl3.x86_64.rpm
-  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/Packages/g/grub2-efi-binary-2.06-27.azl3.x86_64.rpm
-  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/Packages/h/hvloader-1.0.1-5.azl3.x86_64.rpm
-  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/ms-non-oss/x86_64/Packages/m/mshv-26100.9444.2609032029.1-1.azl3.x86_64.rpm
-  curl -fLO https://packages.microsoft.com/azurelinux/3.0/prod/ms-non-oss/x86_64/Packages/m/mshv-bootloader-lx-26100.9444.2609032029.1-1.azl3.x86_64.rpm
-
-  mkdir -p root esp
-  for package in *.rpm
-  do
-    bsdtar -xf "$package" -C root
-  done
-  cp -a root/boot/efi/. esp/
-)
-```
-
-`root/boot/efi` is inside the extracted payload, not a host ESP.
-The MSHV RPMs are proprietary. Review their license files under
-`target/mshv-boot-inputs/root/usr/share/licenses` before use.
+The MSHV RPMs are proprietary and their terms require an active Microsoft
+Azure agreement. Review the extracted license files under
+`target/mshv-boot-inputs/esp/licenses` before use.
 
 The pinned 26100 set failed before Linux in the checked OpenVMM
 configuration. Cloud Hypervisor execution with this set has not been
@@ -276,10 +253,11 @@ directory.
 
 ```sh
 make -j init initramfs kernel MSHV_SOURCE=/path/to/linux TARGET=custom
-./run --esp target/mshv-boot-inputs/esp --build-dir custom --timeout 180 ML0001
+make esp TARGET=custom
+./run --build-dir custom --timeout 180 ML0001
 ```
 
-`./run --esp PATH --build ML0001` rebuilds the executable and initramfs before
+`./run --build ML0001` rebuilds the executable and initramfs before
 execution, but not the kernel. Explicit `--binary` and `--initramfs`
 overrides cannot be combined with `--build`.
 
@@ -341,14 +319,14 @@ create child partitions. Direct Linux boot and device node presence alone
 do not establish the required parent partition privileges.
 
 ```sh
-./run --esp target/mshv-boot-inputs/esp --timeout 180 --repeat 3 ML0001 MR0001 MR0003
+./run --timeout 180 --repeat 3 ML0001 MR0001 MR0003
 ```
 
 | Option | Effect |
 | --- | --- |
 | `--vmm PATH` | Select Cloud Hypervisor or OpenVMM, overriding `MSHV_VMM` or the default `cloud-hypervisor` command |
 | `--backend auto\|ch\|openvmm` | Override backend detection from the executable name |
-| `--esp PATH` | Select the required extracted boot component directory |
+| `--esp PATH` | Override the local boot component directory prepared by `make esp` |
 | `--kernel PATH` | Select an existing x86-64 `bzImage` |
 | `--initramfs PATH` | Select a separate test initramfs |
 | `--console`, `-c` | Show live VM output while retaining complete logs |
@@ -360,7 +338,7 @@ do not establish the required parent partition privileges.
 
 Console mode runs one VM at a time regardless of `--jobs`.
 Use `./run --help` for all options. From the framework directory, use
-`./run --suite /path/to/virtio-villain-mshv --esp PATH` with the same options.
+`./run --suite /path/to/virtio-villain-mshv` with the same options.
 
 Reports, console logs and boot artifacts are retained under
 `target/mshv/results/TIMESTAMP-ID/` by default. `--build-dir` changes the
