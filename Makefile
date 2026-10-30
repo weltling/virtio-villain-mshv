@@ -16,6 +16,9 @@ endif
 
 mshv mshv-initramfs: initramfs
 
+esp:
+	cd "$(SUITE_ROOT)" && python3 -m lib.esp --output "$(TARGET)/mshv-boot-inputs"
+
 clean:
 	python3 "$(VV_ROOT)/lib/python/villain/clean.py" --root "$(CURDIR)" "$(TARGET)"
 
@@ -31,6 +34,7 @@ help:
 	@echo "  initramfs           Build and package the executable as /init (default)"
 	@echo "  mshv, mshv-initramfs Aliases for initramfs"
 	@echo "  kernel              Build the selected Linux source offline"
+	@echo "  esp                 Download and extract pinned boot component RPMs"
 	@echo "  selftest            Run host tests without booting an appliance"
 	@echo "  lint                Run Python lint"
 	@echo "  clean               Remove the entire selected output directory"
@@ -57,13 +61,15 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo '  make -j init initramfs'
+	@echo '  make esp'
 	@echo '  make kernel MSHV_SOURCE=/path/linux'
 	@echo '  make kernel MSHV_SOURCE=/path/linux KERNEL_CONFIGS="/path/base.config /path/extra.config" KERNEL_ARGS="--output /path/custom-kernel"'
 	@echo '  $(VV_ROOT)/build-kernel --help lists all generic kernel build options'
 	@echo ""
 	@echo "Relative paths are resolved from this suite directory."
 	@echo "clean also removes cached boot components, kernel caches and saved results in TARGET."
-	@echo "Use ./run --esp PATH to select extracted boot components."
+	@echo "Runs use TARGET/mshv-boot-inputs/esp without downloading boot components."
+	@echo "Use ./run --esp PATH to select another boot component directory."
 	@echo "Use ./run --help for execution options."
 
-.PHONY: init initramfs mshv mshv-initramfs kernel clean selftest lint help
+.PHONY: init initramfs mshv mshv-initramfs kernel esp clean selftest lint help
