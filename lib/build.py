@@ -20,9 +20,11 @@ def kernel_source(context):
 def kernel(context):
     source = kernel_source(context)
     configs = shlex.split(context.variables.get("KERNEL_CONFIGS", ""))
-    if not configs:
-        configs = [str(source / "Microsoft/configs/x86/mshv_defconfig")]
     command = ["--source", source, "--arch", KERNEL_ARCH]
+    if not configs:
+        command.extend(["--base-config", source / "Microsoft/configs/x86/mshv_defconfig"])
+        configs = [str(context.root / "kernel/common.config"),
+                   str(context.root / f"kernel/{KERNEL_ARCH}.config")]
     for config in configs:
         command.extend(["--config", config])
     command.extend([
