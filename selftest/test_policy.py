@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain")).resolve()
@@ -303,6 +303,41 @@ class PolicyTests(unittest.TestCase):
         module = sys.modules[type(suite).__module__]
         self.assertIsInstance(module.vmm_backend("/local/openvmm", "ch"),
                               module.CloudHypervisor)
+
+    def test_openvmm_worker_launches_nested_uefi_on_kvm(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        output = Path("/diagnostics/boot")
+        for binary, backend, status in (
+                ("/local/openvmm", "auto", 0), ("/local/vmm", "openvmm", 1)):
+            with self.subTest(binary=binary, status=status), \
+                 patch.object(module, "build_image", return_value=Path("/disk")) as build, \
+                 patch.object(module.process, "spawn") as spawn, \
+                 patch.object(os, "execvp") as execute, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                proc = Mock()
+                proc.wait.return_value = status
+                spawn.return_value.__enter__.return_value = (proc, None)
+                with self.assertRaises(SystemExit) as exit:
+                    suite.execute([
+                        "--vmm", binary, "--backend", backend, "--kernel", "/kernel",
+                        "--initramfs", "/initramfs", "--firmware", "/MSVM.fd",
+                        "--cmdline", "vv.tests=ML0001", "--run-id", "fixture",
+                        "--output", str(output)])
+                self.assertEqual(exit.exception.code, status)
+                proc.wait.assert_called_once_with()
+                execute.assert_not_called()
+                build.assert_called_once_with(
+                    output, Path("/kernel"), Path("/initramfs"),
+                    "vv.tests=ML0001", firmware=Path("/MSVM.fd"))
+                spawn.assert_called_once_with([
+                    binary, "--hypervisor", "kvm", "-m", "2G", "-p", "2",
+                    "--com1", "stderr", "--nested-virt",
+                    "--uefi", f"firmware={output / 'firmware.fd'},console=com1",
+                    "--disk", "file:/disk,ro",
+                    "--guest-shutdown-action", "exit", "--guest-reset-action", "exit",
+                    "--guest-crash-action", "exit:1"],
+                    stdin=subprocess.PIPE, start_new_session=False)
 
     def test_firmware_is_resolved_once_and_passed_to_workers(self):
         suite = appliance.load_suite(ROOT)
