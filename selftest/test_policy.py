@@ -276,6 +276,17 @@ class PolicyTests(unittest.TestCase):
                 command = suite.build_command(args, ["ML0001"], "token")
                 self.assertEqual(command[command.index("--backend") + 1], backend)
 
+    def test_openvmm_requires_its_own_firmware(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        args = appliance.parse_args(suite, ["--list", "--vmm", "/local/openvmm"])
+        with patch.object(module, "resolve_firmware") as resolve, \
+             patch.object(os, "open") as opened, \
+             self.assertRaisesRegex(RuntimeError, "OpenVMM requires --firmware"):
+            suite.preflight(args)
+        resolve.assert_not_called()
+        opened.assert_not_called()
+
     def test_firmware_is_resolved_once_and_passed_to_workers(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
