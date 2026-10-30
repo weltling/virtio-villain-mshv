@@ -3,6 +3,7 @@
 """Assemble a UEFI disk from extracted Hyper-V boot components."""
 
 import argparse
+import fcntl
 import gzip
 import hashlib
 import json
@@ -37,6 +38,9 @@ ESP_COMPONENTS = {
     "Windows/System32/hvax64.exe": "Windows/System32/hvax64.exe",
     "Windows/System32/kdstub.dll": "Windows/System32/kdstub.dll",
 }
+SHARED_CMDLINE = (
+    "console=ttyS0,115200 rdinit=/init panic=-1 loglevel=3 "
+    "vv.shutdown=host vv.config=smbios")
 
 PE_DOS_HEADER_SIZE = 64
 PE_DOS_LFANEW_OFFSET = 60
@@ -302,6 +306,53 @@ def build_image(output, kernel, initramfs, cmdline, esp, firmware=FIRMWARE):
     manifest["disk_sha256"] = sha256(disk)
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return disk
+
+
+def _verify_shared_image(output, expected):
+    try:
+        manifest = json.loads((output / "manifest.json").read_text())
+        actual = {name: metadata["sha256"] for name, metadata in manifest["files"].items()}
+        valid = (
+            manifest["cmdline"] == expected["cmdline"] and actual == expected["files"]
+            and manifest["firmware_sha256"] == expected["firmware_sha256"]
+            and (output / "grub.cfg").read_text() == expected["grub"]
+            and sha256(output / "firmware.fd") == expected["firmware_sha256"]
+            and sha256(output / "boot.img") == manifest["disk_sha256"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise RuntimeError(f"Cannot verify shared boot image {output}: {error}") from error
+    if not valid:
+        raise RuntimeError(f"Shared boot image verification failed: {output}")
+
+
+def prepare_image(cache, kernel, initramfs, esp, firmware):
+    sources = {
+        **{name: esp / source for name, source in ESP_COMPONENTS.items()},
+        "boot/vmlinuz": kernel,
+        "boot/initramfs.cpio.gz": initramfs,
+    }
+    expected = {
+        "cmdline": SHARED_CMDLINE,
+        "grub": grub_config(SHARED_CMDLINE),
+        "files": {name: sha256(path) for name, path in sources.items()},
+        "firmware_sha256": sha256(firmware),
+    }
+    key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+    cache.mkdir(parents=True, exist_ok=True)
+    output = cache / key
+    with (cache / ".lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not output.exists():
+            with tempfile.TemporaryDirectory(prefix=".prepare-", dir=cache) as temporary:
+                prepared = Path(temporary) / "image"
+                build_image(prepared, kernel, initramfs, SHARED_CMDLINE, esp, firmware)
+                if ({name: sha256(path) for name, path in sources.items()} != expected["files"]
+                        or sha256(firmware) != expected["firmware_sha256"]):
+                    raise RuntimeError("Boot inputs changed during shared image preparation")
+                _verify_shared_image(prepared, expected)
+                prepared.rename(output)
+        else:
+            _verify_shared_image(output, expected)
+    return output / "boot.img"
 
 
 def main():
