@@ -41,14 +41,15 @@ def verify(path, expected):
         raise RuntimeError(f"SHA256 mismatch for {path}: expected {expected}, actual {actual}")
 
 
-def download(name, expected, cache):
+def download(name, expected, cache, *, url=None):
     path = cache / Path(name).name
     for cached in (path, cache.parent / path.name):
         if cached.exists():
             verify(cached, expected)
             return cached
     print(f"Downloading {path.name}", flush=True)
-    request = Request(PACKAGE_URL + name, headers={"User-Agent": "virtio-villain-mshv"})
+    request = Request(PACKAGE_URL + name if url is None else url,
+                      headers={"User-Agent": "virtio-villain-mshv"})
     with tempfile.TemporaryDirectory(prefix=".download-", dir=cache) as temporary:
         partial = Path(temporary) / path.name
         with urlopen(request, timeout=30) as response, partial.open("wb") as stream:
