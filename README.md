@@ -127,6 +127,10 @@ Use an OpenVMM build that supports `--nested-virt` on KVM and its matching
 write access for your user and have nested VMX/SVM enabled. It does not
 need `/dev/mshv`.
 
+The runner places the PCIe root complex on segment 1. This avoids the
+Hyper-V assumption that x86 PCI configuration space on segment 0 is
+accessible through CF8/CFC I/O ports.
+
 Cloud Hypervisor firmware is not interchangeable with OpenVMM firmware.
 OpenVMM requires an explicit `--firmware` path and does not use the
 Cloud Hypervisor firmware download.
