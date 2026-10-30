@@ -1,16 +1,17 @@
 # MSHV UAPI suite
 
 Linux MSHV UAPI tests for partition lifecycle and virtual processor operations.
-The suite uses Virtio Villain and Cloud Hypervisor to run a selected Linux
-kernel beneath nested Hyper-V. It targets x86-64 parent partitions and child
-partitions without isolation.
+The suite uses Virtio Villain with Cloud Hypervisor or OpenVMM to run a
+selected Linux kernel beneath nested Hyper-V. It targets x86-64 parent
+partitions and child partitions without isolation.
 
 ## Quick start
 
-Use an x86-64 Linux host with working MSHV support. Your user must have read
-and write access to `/dev/mshv`. After changing device group membership,
-start a fresh login session. Each test VM uses two vCPUs and 2 GiB RAM.
-Ordinary nested VMX/SVM support alone is not sufficient.
+Use an x86-64 Linux host with working MSHV support for Cloud Hypervisor or
+KVM with nested VMX/SVM enabled for OpenVMM. Your user must have read and
+write access to `/dev/mshv` or `/dev/kvm` respectively. After changing
+device group membership, start a fresh login session. Each test VM uses
+two vCPUs and 2 GiB RAM.
 
 Have the following inputs available before starting.
 
@@ -93,6 +94,31 @@ An ELF `vmlinux` image cannot be used for this boot path.
 Nested testing can hang the outer host. A process timeout cannot recover
 that host. Use external recovery for unattended runs.
 
+### OpenVMM on KVM
+
+Use an OpenVMM build that supports `--nested-virt` on KVM and its matching
+`MSVM.fd` UEFI firmware. Cloud Hypervisor firmware is not interchangeable
+with OpenVMM firmware. OpenVMM requires an explicit `--firmware` path and
+does not use the Cloud Hypervisor firmware download.
+
+The same ESP components and Linux kernel with MSHV root partition support
+are required. The kernel must include `CONFIG_EFI_STUB=y` and
+`CONFIG_EFI_HANDOVER_PROTOCOL=y` for the GRUB boot path. The host does not
+need `/dev/mshv`. With the executable and initramfs already built, run a
+single test as follows.
+
+```sh
+export MSHV_ESP=/path/to/mshv-boot-components
+./run --vmm /path/to/openvmm --firmware /path/to/MSVM.fd \
+  --kernel /path/to/bzImage --offline --console --timeout 180 ML0001
+```
+
+The runner selects OpenVMM when the executable name contains `openvmm`.
+Use `--backend openvmm` for a renamed executable or `--backend ch` to force
+Cloud Hypervisor. `MSHV_VMM` can also select the OpenVMM executable.
+The runner enables nested virtualization, boots the private ESP disk
+through UEFI and captures COM1 output.
+
 ## Boot inputs
 
 ### ESP components
@@ -122,7 +148,7 @@ elevate privileges.
 
 ### Firmware
 
-Without `--firmware`, the runner prefers the installed
+For Cloud Hypervisor, without `--firmware`, the runner prefers the installed
 `/usr/share/cloud-hypervisor/CLOUDHV_EFI.fd`. If that file is absent, it
 downloads `CLOUDHV.fd` from the latest
 [Cloud Hypervisor edk2 release](https://github.com/cloud-hypervisor/edk2/releases/latest)
@@ -191,6 +217,10 @@ Use `make help` for all suite build variables.
 `KERNEL_CONFIGS` is an ordered, space separated list of config files and
 fragments. A nonempty list replaces the default MSHV config. Later files
 override earlier values. Relative paths are resolved from the suite directory.
+Explicit custom configs are checked strictly. The build fails if Kconfig
+cannot retain a requested value. A full config from another toolchain may
+contain generated compiler versions or unavailable features that need
+updating.
 
 ```sh
 make kernel MSHV_SOURCE=/path/to/linux \
@@ -217,10 +247,6 @@ features needed to boot the test initramfs. These include `CONFIG_MSHV_ROOT=y`,
 
 `make clean` removes the entire selected `TARGET` directory, including
 kernel builds, caches and saved results. Keep reusable ESP files and
-Explicit custom configs are checked strictly. The build fails if Kconfig
-cannot retain a requested value. A full config from another toolchain may
-contain generated compiler versions or unavailable features that need
-updating.
 firmware outside that directory.
 
 ## Running tests
@@ -245,7 +271,8 @@ do not establish the required parent partition privileges.
 
 | Option | Effect |
 | --- | --- |
-| `--vmm PATH` | Override `MSHV_VMM` or the `cloud-hypervisor` command on `PATH` |
+| `--vmm PATH` | Select Cloud Hypervisor or OpenVMM, overriding `MSHV_VMM` or the default `cloud-hypervisor` command |
+| `--backend auto\|ch\|openvmm` | Override backend detection from the executable name |
 | `--kernel PATH` | Select an existing x86-64 `bzImage` |
 | `--initramfs PATH` | Select a separate test initramfs |
 | `--console`, `-c` | Show live VM output while retaining complete logs |
