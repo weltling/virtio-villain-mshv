@@ -80,7 +80,13 @@ The first run selects one lifecycle test with live console output. The second
 runs all tests. Both use local firmware without network access.
 
 The default kernel config is `Microsoft/configs/x86/mshv_defconfig` under
-`MSHV_SOURCE`. If using an existing kernel, omit `kernel` and `MSHV_SOURCE`
+`MSHV_SOURCE`. Kconfig adapts this base config to the source tree and local
+toolchain. Each changed value is reported with its effective value.
+Required appliance options remain strict, including MSHV root partition
+support, EFI handover, initramfs support and the serial console.
+These requirements are layered from `kernel/common.config` and
+`kernel/x86_64.config`.
+If using an existing kernel, omit `kernel` and `MSHV_SOURCE`
 from the build command. Add `--kernel /path/to/bzImage` to each run command.
 An ELF `vmlinux` image cannot be used for this boot path.
 
@@ -136,6 +142,11 @@ their formats before launching tests. These checks do not establish
 provenance or guarantee that a component set will boot together.
 
 ## Build options
+
+The suite currently builds and runs x86_64 appliances only.
+`kernel/aarch64.config` provides an ARM64 fragment for kernel configuration
+preparation. It requires 4 KiB pages for MSHV and selects the PL011 console.
+It does not enable ARM64 appliance builds or execution.
 
 `make init` builds the static test executable. `make initramfs` builds and
 packages it as `/init` and is the default target. `mshv` and
@@ -206,6 +217,10 @@ features needed to boot the test initramfs. These include `CONFIG_MSHV_ROOT=y`,
 
 `make clean` removes the entire selected `TARGET` directory, including
 kernel builds, caches and saved results. Keep reusable ESP files and
+Explicit custom configs are checked strictly. The build fails if Kconfig
+cannot retain a requested value. A full config from another toolchain may
+contain generated compiler versions or unavailable features that need
+updating.
 firmware outside that directory.
 
 ## Running tests
