@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install -y build-essential python3
       - run: make -j$(nproc) init initramfs
-      - run: test -s target/mshv/init && test -s target/mshv/initramfs.cpio.gz
+      - run: test -s target/init && test -s target/initramfs.cpio.gz
       - run: ./run --list
   selftest:
     runs-on: ubuntu-latest
