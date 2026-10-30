@@ -42,13 +42,19 @@ class MshvSuite(Suite):
                             "'openvmm', otherwise Cloud Hypervisor)")
         parser.add_argument("--firmware", type=Path, help="Explicit local UEFI firmware")
         parser.add_argument("--esp", type=Path,
-                            help="Boot component directory (required except with --list)")
+                            help="Local boot components (default: selected build output "
+                            "mshv-boot-inputs/esp, prepared with make esp)")
         parser.add_argument("--offline", action="store_true",
                             help="Use installed or cached firmware without network access")
 
     def preflight(self, args):
         if args.esp is None:
-            raise RuntimeError("--esp PATH is required to select the boot component directory")
+            context = self.build_spec.context(args.build_dir)
+            args.esp = context.target / "mshv-boot-inputs/esp"
+            if not args.esp.is_dir():
+                raise RuntimeError(
+                    f"No prepared boot components at {args.esp}. "
+                    "Run make esp with the matching TARGET or select --esp PATH.")
         args.esp = args.esp.resolve()
         backend = vmm_backend(args.vmm, args.backend)
         if isinstance(backend, OpenVmm):
