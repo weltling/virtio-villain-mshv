@@ -199,7 +199,7 @@ class EspTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("make"), "Make required for ESP target checks")
 class EspMakeTests(unittest.TestCase):
-    def test_make_esp_uses_the_selected_target_without_building_an_appliance(self):
+    def test_make_input_targets_use_the_selected_output_without_building_an_appliance(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             suite = root / "suite"
@@ -207,15 +207,20 @@ class EspMakeTests(unittest.TestCase):
             library.mkdir(parents=True)
             shutil.copyfile(ROOT / "Makefile", suite / "Makefile")
             record = root / "arguments.json"
-            (library / "esp.py").write_text(
-                "import json, sys\n"
-                "from pathlib import Path\n"
-                f"Path({str(record)!r}).write_text(json.dumps(sys.argv[1:]))\n")
-            for target in ("target", str(root / "custom output")):
-                with self.subTest(target=target):
+            for name in ("esp", "firmware"):
+                (library / f"{name}.py").write_text(
+                    "import json, sys\n"
+                    "from pathlib import Path\n"
+                    f"Path({str(record)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+            for goal, directory, target in (
+                    (goal, directory, target)
+                    for goal, directory in (
+                        ("esp", "mshv-boot-inputs"), ("openvmm-firmware", "openvmm-firmware"))
+                    for target in ("target", str(root / "custom output"))):
+                with self.subTest(goal=goal, target=target):
                     result = subprocess.run([
                         "make", "--no-print-directory", "-C", str(suite),
-                        "-j", "esp", "esp", f"TARGET={target}",
+                        "-j", goal, goal, f"TARGET={target}",
                     ], capture_output=True, text=True, timeout=20)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     expected = Path(target)
@@ -226,7 +231,7 @@ class EspMakeTests(unittest.TestCase):
                     output = Path(arguments[1])
                     if not output.is_absolute():
                         output = suite / output
-                    self.assertEqual(output, expected / "mshv-boot-inputs")
+                    self.assertEqual(output, expected / directory)
             self.assertFalse((suite / "target/mshv/init").exists())
 
 
