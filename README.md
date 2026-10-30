@@ -198,9 +198,7 @@ The MSHV RPMs are proprietary and their terms require an active Microsoft
 Azure agreement. Review the extracted license files under
 `target/mshv-boot-inputs/esp/licenses` before use.
 
-The pinned 26100 set failed before Linux in the checked OpenVMM
-configuration. Cloud Hypervisor execution with this set has not been
-checked.
+Cloud Hypervisor execution with this component set has not been checked.
 
 ### Firmware
 
@@ -234,6 +232,14 @@ then run with `--build-dir custom`.
 All boot inputs must be nonempty readable regular files. Preflight checks
 their formats before launching tests. These checks do not establish
 provenance or guarantee that a component set will boot together.
+
+### Shared boot image
+
+The first run builds one 130 MiB boot disk under `target/boot/INPUT_HASH/`. Every test and repetition boots that disk read only. Later runs reuse it when the kernel, initramfs, ESP components, firmware and boot configuration are unchanged.
+
+Changed boot inputs create a new cache entry without replacing images used by other runs. `--build-dir` changes the cache root. Per test results retain logs and small launch metadata files that reference the shared image, not copies of the disk or firmware.
+
+Build the initramfs with the current sibling framework checkout. The shared image requires its SMBIOS startup support and `CONFIG_DMI=y` and `CONFIG_DMIID=y` in the kernel.
 
 ## Build options
 
@@ -309,7 +315,8 @@ Custom configurations must include MSHV root partition support and the
 features needed to boot the test initramfs. These include `CONFIG_MSHV_ROOT=y`,
 `CONFIG_HYPERV=y`, `CONFIG_HYPERV_VMBUS=y`, `CONFIG_BLK_DEV_INITRD=y`,
 `CONFIG_RD_GZIP=y`, `CONFIG_DEVTMPFS=y`, `CONFIG_PROC_FS=y`,
-`CONFIG_SYSFS=y`, `CONFIG_BINFMT_ELF=y` and the serial console.
+`CONFIG_SYSFS=y`, `CONFIG_BINFMT_ELF=y`, `CONFIG_DMI=y`, `CONFIG_DMIID=y`
+and the serial console.
 
 ### Cleanup
 
@@ -355,12 +362,7 @@ Console mode runs one VM at a time regardless of `--jobs`.
 Use `./run --help` for all options. From the framework directory, use
 `./run --suite /path/to/virtio-villain-mshv` with the same options.
 
-Reports, console logs and boot artifacts are retained under
-`target/results/TIMESTAMP-ID/` by default. `--build-dir` changes the
-build root and default results location. `--output` selects an explicit
-new directory instead. `results.json` includes individual verdicts, image
-hashes, launch arguments and artifact paths. Failed runs also retain
-diagnostics.
+Reports, console logs and launch metadata are retained under `target/results/TIMESTAMP-ID/` by default. `--build-dir` changes the build root and default results location. `--output` selects an explicit new directory instead. `results.json` includes individual verdicts, image hashes, launch arguments and artifact paths. Failed runs also retain diagnostics. Shared boot images remain under the build root.
 
 No external recovery control is supplied by this repository. The control
 must survive a hang of the outer host, not merely terminate the VMM.
