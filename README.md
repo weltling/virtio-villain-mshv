@@ -132,12 +132,17 @@ Hyper-V assumption that x86 PCI configuration space on segment 0 is
 accessible through CF8/CFC I/O ports.
 
 Cloud Hypervisor firmware is not interchangeable with OpenVMM firmware.
-OpenVMM requires an explicit `--firmware` path and does not use the
+Obtain the public MSVM firmware with `make openvmm-firmware`.
+This downloads and verifies the
+[mu_msvm v26.0.22 x64 VS2022 release archive](https://github.com/microsoft/mu_msvm/releases/download/v26.0.22/RELEASE-X64-VS2022-artifacts.tar.gz)
+and extracts `FV/MSVM.fd` to `target/openvmm-firmware/MSVM.fd`.
+OpenVMM requires this explicit `--firmware` path and does not use the
 Cloud Hypervisor firmware download.
 
 ```sh
+make openvmm-firmware
 export MSHV_VMM=/path/to/openvmm
-firmware=/path/to/MSVM.fd
+firmware=target/openvmm-firmware/MSVM.fd
 
 ./run --firmware "$firmware" --offline --console --timeout 180 ML0001
 ./run --firmware "$firmware" --offline --timeout 180
@@ -219,6 +224,14 @@ silently select an older version.
 OpenVMM always requires `--firmware PATH` pointing to its `MSVM.fd`.
 The installed Cloud Hypervisor firmware and its download cache are not
 used by the OpenVMM backend.
+
+Run `make openvmm-firmware` to obtain the pinned public firmware described
+in [OpenVMM setup](#openvmm-with-kvm). The archive and extracted firmware
+are verified with SHA256 before reuse. No firmware is fetched during an
+OpenVMM run.
+Use `make openvmm-firmware TARGET=custom` for a different build output,
+then select `--firmware custom/openvmm-firmware/MSVM.fd`.
+`make clean` removes these downloaded inputs along with other build output.
 
 All boot inputs must be nonempty readable regular files. Preflight checks
 their formats before launching tests. These checks do not establish
