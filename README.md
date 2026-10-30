@@ -49,13 +49,11 @@ paths with your checkouts.
 
 ```sh
 cd /path/to/virtio-villain-mshv
-export VV_ROOT=/path/to/virtio-villain
 ```
 
 Select the VMM and its firmware in step 4.
 
-`VV_ROOT` can be omitted when the framework is in a sibling
-`virtio-villain` directory.
+Keep the framework in a sibling `virtio-villain` directory.
 
 ### 3. Build the appliance and kernel
 
@@ -63,8 +61,7 @@ Prepare the boot files, then build the executable, initramfs and selected
 kernel. Kernel sources must already be available locally.
 
 ```sh
-make esp
-make -j init initramfs kernel MSHV_SOURCE=/path/to/linux
+make -j init initramfs kernel esp openvmm-firmware MSHV_SOURCE=/path/to/linux
 ./run --list
 ```
 
@@ -84,6 +81,12 @@ that host. Use external recovery for unattended runs.
 
 ### 4. Select a VMM and run
 
+```sh
+./run --vmm /path/to/openvmm --offline --console --timeout 180 ML0001
+```
+
+## VMM backends
+
 Both backends use the same test executable, initramfs, MSHV kernel and
 ESP components. They differ in the host hypervisor interface and UEFI
 firmware.
@@ -95,7 +98,7 @@ firmware.
 | UEFI firmware | Cloud Hypervisor `CLOUDHV.fd` or compatible firmware | OpenVMM `MSVM.fd` |
 | Boot component RPMs | All five packages listed below | All five packages listed below |
 
-#### Cloud Hypervisor with MSHV
+### Cloud Hypervisor with MSHV
 
 Use a Cloud Hypervisor executable built with its `mshv` feature and
 support for nested Hyper-V. The host must provide `/dev/mshv` with read
@@ -109,18 +112,15 @@ Obtain `CLOUDHV.fd` from the
 This firmware is separate from the ESP component RPMs.
 
 ```sh
-export MSHV_VMM=/path/to/cloud-hypervisor
-firmware=/path/to/CLOUDHV.fd
-
-./run --firmware "$firmware" --offline --console --timeout 180 ML0001
-./run --firmware "$firmware" --offline --timeout 180
+./run --vmm /path/to/cloud-hypervisor --firmware /path/to/CLOUDHV.fd --offline --console --timeout 180 ML0001
+./run --vmm /path/to/cloud-hypervisor --firmware /path/to/CLOUDHV.fd --offline --timeout 180
 ```
 
-`MSHV_VMM` can be omitted when the correct `cloud-hypervisor` executable
+`--vmm` can be omitted when the correct `cloud-hypervisor` executable
 is on `PATH`. Without an explicit firmware path, Cloud Hypervisor uses
 the [firmware selection](#firmware) described below.
 
-#### OpenVMM with KVM
+### OpenVMM with KVM
 
 Use an OpenVMM build that supports `--nested-virt` on KVM and its matching
 `MSVM.fd` UEFI firmware. The host must provide `/dev/kvm` with read and
@@ -134,18 +134,16 @@ accessible through CF8/CFC I/O ports.
 Cloud Hypervisor firmware is not interchangeable with OpenVMM firmware.
 Obtain the public MSVM firmware with `make openvmm-firmware`.
 This downloads and verifies the
-[mu_msvm v26.0.22 x64 VS2022 release archive](https://github.com/microsoft/mu_msvm/releases/download/v26.0.22/RELEASE-X64-VS2022-artifacts.tar.gz)
+[mu_msvm x64 VS2022 release archive](https://github.com/microsoft/mu_msvm/releases/download/v26.0.22/RELEASE-X64-VS2022-artifacts.tar.gz)
 and extracts `FV/MSVM.fd` to `target/openvmm-firmware/MSVM.fd`.
-OpenVMM requires this explicit `--firmware` path and does not use the
+OpenVMM uses this prepared image by default and does not use the
 Cloud Hypervisor firmware download.
 
 ```sh
 make openvmm-firmware
-export MSHV_VMM=/path/to/openvmm
-firmware=target/openvmm-firmware/MSVM.fd
 
-./run --firmware "$firmware" --offline --console --timeout 180 ML0001
-./run --firmware "$firmware" --offline --timeout 180
+./run --vmm /path/to/openvmm --offline --console --timeout 180 ML0001
+./run --vmm /path/to/openvmm --offline --timeout 180
 ```
 
 For either backend, the first command runs one lifecycle test with live
@@ -156,7 +154,7 @@ The GRUB boot path requires `CONFIG_EFI_STUB=y` and
 
 The runner selects OpenVMM when the executable name contains `openvmm`.
 Use `--backend openvmm` for a renamed executable or `--backend ch` to force
-Cloud Hypervisor. `--vmm PATH` overrides `MSHV_VMM` for one run.
+Cloud Hypervisor. `--vmm PATH` selects the executable for one run.
 Both backends boot the generated ESP disk through UEFI and capture the
 serial console.
 
@@ -216,12 +214,12 @@ is an error, not a download trigger.
 Use `--firmware PATH` to select a local file explicitly. `--offline`
 forbids network access and permits installed firmware or the last verified
 cached release. The cache is under
-`$XDG_CACHE_HOME/virtio-villain/firmware`, or
-`$HOME/.cache/virtio-villain/firmware` when `XDG_CACHE_HOME` is unset.
+`target/virtio-villain/firmware` in the suite directory.
 Online fallback checks for the latest release. Download failures do not
 silently select an older version.
 
-OpenVMM always requires `--firmware PATH` pointing to its `MSVM.fd`.
+OpenVMM uses `openvmm-firmware/MSVM.fd` under the selected build output
+by default. Use `--firmware PATH` to select another local `MSVM.fd`.
 The installed Cloud Hypervisor firmware and its download cache are not
 used by the OpenVMM backend.
 
@@ -230,7 +228,7 @@ in [OpenVMM setup](#openvmm-with-kvm). The archive and extracted firmware
 are verified with SHA256 before reuse. No firmware is fetched during an
 OpenVMM run.
 Use `make openvmm-firmware TARGET=custom` for a different build output,
-then select `--firmware custom/openvmm-firmware/MSVM.fd`.
+then run with `--build-dir custom`.
 `make clean` removes these downloaded inputs along with other build output.
 
 All boot inputs must be nonempty readable regular files. Preflight checks
@@ -259,8 +257,8 @@ Default build outputs are under this suite directory.
 
 | Output | Purpose |
 | --- | --- |
-| `target/mshv/init` | Static test executable |
-| `target/mshv/initramfs.cpio.gz` | Test initramfs |
+| `target/init` | Static test executable |
+| `target/initramfs.cpio.gz` | Test initramfs |
 | `target/kernel/images/bzImage-x86_64` | Kernel used by the nested boot path |
 | `target/kernel/images/vmlinux-x86_64` | ELF kernel image, not a boot input for this suite |
 
@@ -269,8 +267,7 @@ select matching outputs. Relative output roots are resolved from the suite
 directory.
 
 ```sh
-make -j init initramfs kernel MSHV_SOURCE=/path/to/linux TARGET=custom
-make esp TARGET=custom
+make -j init initramfs kernel esp openvmm-firmware MSHV_SOURCE=/path/to/linux TARGET=custom
 ./run --build-dir custom --timeout 180 ML0001
 ```
 
@@ -306,7 +303,7 @@ directory. Set `V=1` to print build commands.
 
 Kernel builds use `RUSTC=false` by default. For a compatible configuration
 requiring Rust, pass `RUSTC=rustc` or another compiler command to Make.
-Use `"$VV_ROOT/build-kernel" --help` for all kernel builder options.
+Use `../virtio-villain/build-kernel --help` for all kernel builder options.
 
 Custom configurations must include MSHV root partition support and the
 features needed to boot the test initramfs. These include `CONFIG_MSHV_ROOT=y`,
@@ -341,8 +338,9 @@ do not establish the required parent partition privileges.
 
 | Option | Effect |
 | --- | --- |
-| `--vmm PATH` | Select Cloud Hypervisor or OpenVMM, overriding `MSHV_VMM` or the default `cloud-hypervisor` command |
+| `--vmm PATH` | Select Cloud Hypervisor or OpenVMM instead of the default `cloud-hypervisor` command |
 | `--backend auto\|ch\|openvmm` | Override backend detection from the executable name |
+| `--firmware PATH` | Override the selected local UEFI firmware |
 | `--esp PATH` | Override the local boot component directory prepared by `make esp` |
 | `--kernel PATH` | Select an existing x86-64 `bzImage` |
 | `--initramfs PATH` | Select a separate test initramfs |
@@ -358,7 +356,7 @@ Use `./run --help` for all options. From the framework directory, use
 `./run --suite /path/to/virtio-villain-mshv` with the same options.
 
 Reports, console logs and boot artifacts are retained under
-`target/mshv/results/TIMESTAMP-ID/` by default. `--build-dir` changes the
+`target/results/TIMESTAMP-ID/` by default. `--build-dir` changes the
 build root and default results location. `--output` selects an explicit
 new directory instead. `results.json` includes individual verdicts, image
 hashes, launch arguments and artifact paths. Failed runs also retain

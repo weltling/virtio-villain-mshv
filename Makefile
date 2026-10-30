@@ -65,6 +65,7 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo '  make -j init initramfs'
+	@echo '  make -j init initramfs kernel esp openvmm-firmware MSHV_SOURCE=/path/to/linux'
 	@echo '  make esp'
 	@echo '  make openvmm-firmware'
 	@echo '  make kernel MSHV_SOURCE=/path/linux'
