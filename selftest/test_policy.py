@@ -287,6 +287,17 @@ class PolicyTests(unittest.TestCase):
         resolve.assert_not_called()
         opened.assert_not_called()
 
+    def test_openvmm_device_failure_is_not_ignored(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        args = appliance.parse_args(suite, [
+            "--list", "--vmm", "openvmm", "--firmware", "/local/MSVM.fd"])
+        with patch.object(module, "validate_boot_inputs"), \
+             patch.object(module, "executable"), \
+             patch.object(os, "open", side_effect=PermissionError("KVM denied")), \
+             self.assertRaisesRegex(PermissionError, "KVM denied"):
+            suite.preflight(args)
+
     def test_firmware_is_resolved_once_and_passed_to_workers(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
