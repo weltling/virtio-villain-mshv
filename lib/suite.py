@@ -102,7 +102,8 @@ class MshvSuite(Suite):
                 LaunchConfig(cpus=2, memory="2G"),
                 hypervisor="kvm", serial="stderr")
             command += [
-                "--nested-virt", "--uefi", f"firmware={output / 'firmware.fd'},console=com1",
+                "--nested-virt", "--pcie-root-complex", "rc0,segment=1",
+                "--uefi", f"firmware={output / 'firmware.fd'},console=com1",
                 "--disk", f"file:{disk},ro",
                 "--guest-shutdown-action", "exit", "--guest-reset-action", "exit",
                 "--guest-crash-action", "exit:1"]
