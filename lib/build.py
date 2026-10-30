@@ -41,6 +41,6 @@ def kernel(context):
 
 def create_build(root):
     return BuildSpec(
-        root=root, sources=build_sources, directory=Path("mshv"), cc="gcc",
+        root=root, sources=build_sources, directory=Path("."), cc="gcc",
         cppflags=lambda context: [f"-I{context.root}"],
         kernel=kernel)
