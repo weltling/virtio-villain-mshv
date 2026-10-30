@@ -154,6 +154,19 @@ class PolicyTests(unittest.TestCase):
             self.assertIn(expected, text)
         self.assertNotIn("/boot/efi", text)
 
+    def test_appliance_outputs_follow_the_selected_build_root(self):
+        suite = appliance.load_suite(ROOT)
+        for selected in (None, "custom-output"):
+            with self.subTest(selected=selected), \
+                 patch.dict(os.environ, {"TARGET": "target"}):
+                options = [] if selected is None else ["--build-dir", selected]
+                args = appliance.parse_args(suite, ["--list", *options])
+                expected = ROOT / (selected or "target")
+                self.assertEqual(args.binary, expected / "init")
+                self.assertEqual(args.initramfs, expected / "initramfs.cpio.gz")
+                self.assertEqual(suite.binary, args.binary)
+                self.assertEqual(suite.initramfs, args.initramfs)
+
     def test_default_kernel_matches_the_suite_build_output(self):
         suite = appliance.load_suite(ROOT)
         self.assertIsNone(suite.kernel)
@@ -174,7 +187,7 @@ class PolicyTests(unittest.TestCase):
                 "--build-dir", str(target), "--initramfs", str(archive),
                 "--esp", "/components", "ML001"])
             self.assertEqual(args.kernel, kernel)
-            args.workspace = target / "mshv/results/fixture/artifacts/1-ML001"
+            args.workspace = target / "results/fixture/artifacts/1-ML001"
             command = suite.build_command(args, ["ML001"], "token")
             self.assertEqual(command[command.index("--kernel") + 1], str(kernel))
             self.assertEqual(command[command.index("--output") + 1],

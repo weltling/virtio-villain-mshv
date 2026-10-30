@@ -232,7 +232,7 @@ class EspMakeTests(unittest.TestCase):
                     if not output.is_absolute():
                         output = suite / output
                     self.assertEqual(output, expected / directory)
-            self.assertFalse((suite / "target/mshv/init").exists())
+            self.assertFalse((suite / "target/init").exists())
 
 
 if __name__ == "__main__":

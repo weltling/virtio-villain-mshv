@@ -192,7 +192,7 @@ class FirmwareTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 boot_image.main()
             self.assertEqual(build.call_args.args[1], kernel)
-            self.assertEqual(build.call_args.args[2], target / "mshv/initramfs.cpio.gz")
+            self.assertEqual(build.call_args.args[2], target / "initramfs.cpio.gz")
 
 
 class BootImageTests(unittest.TestCase):
@@ -499,7 +499,7 @@ class BootImageTests(unittest.TestCase):
                     self.assertEqual(status, 0, captured.getvalue())
                     target = source / ("target" if mode == "default" else "selected-build")
                     directory = (root / "selected diagnostics" if mode == "output" else
-                                 next((target / "mshv/results").iterdir()))
+                                 next((target / "results").iterdir()))
                     report = json.loads((directory / "results.json").read_text())
                     run = report["runs"][0]
                     workspace = directory / "artifacts/1-ML001"
@@ -517,3 +517,4 @@ class BootImageTests(unittest.TestCase):
                                      boot_image.sha256(inputs["initramfs"]))
                     self.assertFalse((source / "target/nested-hyperv").exists())
                     self.assertFalse((source / "target/image-work").exists())
+                    self.assertFalse((target / "mshv").exists())

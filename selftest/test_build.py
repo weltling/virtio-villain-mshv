@@ -291,7 +291,7 @@ class BuildTests(unittest.TestCase):
                     else:
                         self.assertNotIn("--base-config", arguments)
                     self.assertIn("--offline", arguments)
-                    self.assertTrue((root / "target/mshv/initramfs.cpio.gz").is_file())
+                    self.assertTrue((root / "target/initramfs.cpio.gz").is_file())
                     self.assertTrue(
                         (output / "images/bzImage-x86_64").is_file())
                     selected = json.loads((root / "target/kernel-result.json").read_text())
@@ -353,8 +353,8 @@ class BuildTests(unittest.TestCase):
                 subprocess.run(["git", "-C", str(root), "add", "lib"], check=True)
                 output = root / target
                 for name in (
-                        "mshv/init", "mshv/initramfs.cpio.gz", "mshv/obj/test.o",
-                        "mshv/stale.h", "mshv/results/results.json",
+                        "init", "initramfs.cpio.gz", "obj/test.o",
+                        "stale.h", "results/results.json",
                         "kernel/images/kernel", "kernel-cache/source",
                         "nested-hyperv/runs/test/boot.img", "boot-components/esp/shim"):
                     path = output / name
@@ -430,9 +430,10 @@ class BuildTests(unittest.TestCase):
                     "-f", str(ROOT / "Makefile"), f"VV_ROOT={framework}",
                     f"MSHV_SOURCE={root / 'nonexistent kernel source'}", *goals,
                 ], check=True, capture_output=True, text=True, timeout=20)
-                archive = root / "target/mshv/initramfs.cpio.gz"
-                self.assertTrue((root / "target/mshv/init").is_file())
-                self.assertFalse((root / "target/mshv/contract.h").exists())
+                archive = root / "target/initramfs.cpio.gz"
+                self.assertTrue((root / "target/init").is_file())
+                self.assertFalse((root / "target/contract.h").exists())
+                self.assertFalse((root / "target/mshv").exists())
                 expected = ["link"]
                 if goals != ["init"]:
                     expected.append("pack")
