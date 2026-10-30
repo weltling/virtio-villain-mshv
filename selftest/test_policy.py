@@ -252,6 +252,30 @@ class PolicyTests(unittest.TestCase):
             args = appliance.parse_args(suite, ["--list", "--vmm", "cloud-hypervisor"])
         self.assertEqual(args.vmm, "cloud-hypervisor")
 
+    def test_openvmm_preflight_checks_kvm_without_cloud_firmware_resolution(self):
+        suite = appliance.load_suite(ROOT)
+        module = sys.modules[type(suite).__module__]
+        for binary, backend in (("/local/openvmm", "auto"), ("/local/vmm", "openvmm")):
+            with self.subTest(binary=binary):
+                args = appliance.parse_args(suite, [
+                    "--list", "--vmm", binary, "--backend", backend,
+                    "--firmware", "/local/MSVM.fd", "--offline"])
+                with patch.object(module, "resolve_firmware") as resolve, \
+                     patch.object(module, "validate_boot_inputs") as validate, \
+                     patch.object(module, "executable") as executable, \
+                     patch.object(os, "open", return_value=42) as opened, \
+                     patch.object(os, "close") as closed:
+                    suite.preflight(args)
+                resolve.assert_not_called()
+                validate.assert_called_once_with(
+                    args.kernel, args.initramfs, firmware=Path("/local/MSVM.fd"))
+                executable.assert_called_once_with(binary)
+                opened.assert_called_once_with("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+                closed.assert_called_once_with(42)
+                args.workspace = Path("/diagnostics")
+                command = suite.build_command(args, ["ML0001"], "token")
+                self.assertEqual(command[command.index("--backend") + 1], backend)
+
     def test_firmware_is_resolved_once_and_passed_to_workers(self):
         suite = appliance.load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
