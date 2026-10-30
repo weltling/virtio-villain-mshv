@@ -3,6 +3,7 @@
 """Private nested boot disk assembly checks."""
 
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import importlib.util
 import io
@@ -14,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -323,46 +325,37 @@ class BootImageTests(unittest.TestCase):
             run.assert_not_called()
             self.assertFalse((root / "image").exists())
 
-    def test_suite_prepares_the_boot_disk_and_executes_the_selected_vmm(self):
+    def test_suite_attaches_the_shared_boot_disk_without_copying_it(self):
         suite = load_suite(ROOT)
         module = sys.modules[type(suite).__module__]
-        output = Path("/diagnostics/artifacts/1-ML001/boot")
-        arguments = [
-            "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
-            "--esp", "/components", "--firmware", "/selected/firmware",
-            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test",
-            "--output", str(output)]
-        with patch.object(module, "build_image", return_value=output / "boot.img") as build, \
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(module, "prepare_image") as prepare, \
              patch.object(module.os, "execvp") as execute, \
              patch.object(module.CloudHypervisor, "build_cmd",
                           side_effect=AssertionError("Virtio fixtures must not be selected")), \
              patch.dict(os.environ, {"VV_CH_DEBUG": "1"}), \
              contextlib.redirect_stdout(io.StringIO()):
-            suite.execute(arguments)
-        build.assert_called_once_with(
-            output, Path("/kernel"), Path("/archive"), "vv.run=launcher-test",
-            Path("/components"), firmware=Path("/selected/firmware"))
+            output = Path(work) / "boot"
+            suite.execute([
+                "--vmm", "/vmm", "--image", "/shared/boot.img",
+                "--firmware", "/shared/firmware.fd", "--tests", "ML001,MR001",
+                "--run-id", "launcher-test", "--output", str(output)])
+            self.assertEqual({path.name for path in output.iterdir()}, {"launch.json"})
+            self.assertEqual(json.loads((output / "launch.json").read_text()), {
+                "image": "/shared/boot.img", "firmware": "/shared/firmware.fd",
+                "image_manifest": "/shared/manifest.json",
+                "run_id": "launcher-test", "tests": ["ML001", "MR001"],
+            })
+        prepare.assert_not_called()
         command = execute.call_args.args[1]
         self.assertEqual(execute.call_args.args[0], "/vmm")
         self.assertEqual(command, [
-            "/vmm", "--firmware", str(output / "firmware.fd"),
+            "/vmm", "--firmware", "/shared/firmware.fd",
             "--cpus", "boot=2,nested=on", "--memory", "size=2G",
             "--serial", "tty", "--console", "off",
-            "--disk", f"path={output / 'boot.img'},image_type=raw,readonly=on"])
-
-    def test_suite_does_not_start_a_vm_after_builder_failure(self):
-        suite = load_suite(ROOT)
-        module = sys.modules[type(suite).__module__]
-        arguments = [
-            "--vmm", "/vmm", "--kernel", "/kernel", "--initramfs", "/archive",
-            "--esp", "/components", "--firmware", "/selected/firmware",
-            "--cmdline", "vv.run=launcher-test", "--run-id", "launcher-test",
-            "--output", "/diagnostics/artifacts/1-ML001/boot"]
-        with patch.object(module, "build_image", side_effect=RuntimeError("Builder failed")), \
-             patch.object(module.os, "execvp") as execute, \
-             self.assertRaisesRegex(RuntimeError, "Builder failed"):
-            suite.execute(arguments)
-        execute.assert_not_called()
+            "--disk", "path=/shared/boot.img,image_type=raw,readonly=on",
+            "--platform",
+            "system_serial_number=launcher-test,system_version=vv:,system_sku_number=ML001+MR001"])
 
     def test_grub_chain_and_command_line(self):
         config = boot_image.grub_config("vv.run=token vv.tests=ML001 rdinit=/init")
@@ -455,7 +448,8 @@ class BootImageTests(unittest.TestCase):
     @unittest.skipUnless(all(shutil.which(tool) for tool in boot_image.IMAGE_TOOLS),
                          "Disk image tools required")
     def test_run_artifacts_follow_default_build_and_explicit_output_directories(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(boot_image, "build_image", wraps=boot_image.build_image) as build:
             root = Path(temporary)
             inputs = boot_inputs(root)
             source = root / "suite"
@@ -466,13 +460,16 @@ class BootImageTests(unittest.TestCase):
             vmm = root / "fixture-vmm"
             vmm.write_text(
                 f"#!{sys.executable}\n"
-                "import json, signal, sys\n"
+                "import signal, sys\n"
                 "from pathlib import Path\n"
                 "firmware = Path(sys.argv[sys.argv.index('--firmware') + 1])\n"
-                "manifest = json.loads((firmware.parent / 'manifest.json').read_text())\n"
-                "options = dict(word.split('=', 1) for word in manifest['cmdline'].split()\n"
-                "               if '=' in word)\n"
-                "token, name = options['vv.run'], options['vv.tests']\n"
+                "assert sys.argv[sys.argv.index('--disk') + 1] == "
+                "f'path={firmware.parent / \"boot.img\"},image_type=raw,readonly=on'\n"
+                "platform = sys.argv[sys.argv.index('--platform') + 1]\n"
+                "options = dict(word.split('=', 1) for word in platform.split(','))\n"
+                "assert options['system_version'].startswith('vv:')\n"
+                "token = options['system_serial_number'] + options['system_version'][3:]\n"
+                "name = options['system_sku_number'].replace('+', ',')\n"
                 "print(f'MSHV-BEGIN {token} mshv-uapi-v1')\n"
                 "print(f'MSHV-RUN {token} {name}')\n"
                 "print(f'MSHV-RESULT {token} {name} PASS')\n"
@@ -493,24 +490,36 @@ class BootImageTests(unittest.TestCase):
                         "--initramfs", str(inputs["initramfs"]),
                         "--esp", str(inputs["esp"]),
                         "--firmware", str(inputs["firmware"]),
-                        "--vmm", str(vmm), *options])
-                    with contextlib.redirect_stdout(io.StringIO()) as captured:
-                        status = appliance.launch(suite, args, ["ML001"])
-                    self.assertEqual(status, 0, captured.getvalue())
+                        "--vmm", str(vmm), "--jobs", "8", "--repeat", "2", *options])
                     target = source / ("target" if mode == "default" else "selected-build")
+                    args.boot_image = boot_image.prepare_image(target / "boot", **inputs)
+                    original = (boot_image.sha256(args.boot_image),
+                                args.boot_image.stat().st_mtime_ns)
+                    with contextlib.redirect_stdout(io.StringIO()) as captured:
+                        status = appliance.launch(suite, args, ["ML001", "MR001"])
+                    self.assertEqual(status, 0, captured.getvalue())
                     directory = (root / "selected diagnostics" if mode == "output" else
                                  next((target / "results").iterdir()))
                     report = json.loads((directory / "results.json").read_text())
-                    run = report["runs"][0]
-                    workspace = directory / "artifacts/1-ML001"
-                    self.assertEqual(Path(run["workspace"]), workspace)
-                    self.assertEqual(Path(run["console"]).parent, directory)
-                    self.assertTrue(run["host_shutdown"])
-                    output = workspace / "boot"
-                    self.assertEqual({path.name for path in output.iterdir()},
-                                     {"boot.img", "firmware.fd", "grub.cfg", "manifest.json"})
-                    manifest = json.loads((output / "manifest.json").read_text())
-                    self.assertIn("vv.run=" + run["run_id"], manifest["cmdline"])
+                    self.assertEqual(len(report["runs"]), 4)
+                    self.assertEqual(len({run["run_id"] for run in report["runs"]}), 4)
+                    for run in report["runs"]:
+                        workspace = directory / f"artifacts/{run['iteration']}-{run['test']}"
+                        self.assertEqual(Path(run["workspace"]), workspace)
+                        self.assertEqual(Path(run["console"]).parent, directory)
+                        self.assertTrue(run["host_shutdown"])
+                        output = workspace / "boot"
+                        self.assertEqual({path.name for path in output.iterdir()}, {"launch.json"})
+                        launch = json.loads((output / "launch.json").read_text())
+                        self.assertEqual(launch["run_id"], run["run_id"])
+                        self.assertEqual(launch["tests"], [run["test"]])
+                        self.assertEqual(launch["image"], str(args.boot_image))
+                    self.assertEqual(
+                        (boot_image.sha256(args.boot_image), args.boot_image.stat().st_mtime_ns),
+                        original)
+                    self.assertEqual(list((target / "boot").glob("*/boot.img")), [args.boot_image])
+                    self.assertFalse(list(directory.rglob("boot.img")))
+                    self.assertFalse(list(directory.rglob("firmware.fd")))
                     self.assertEqual(report["kernel_sha256"],
                                      boot_image.sha256(inputs["kernel"]))
                     self.assertEqual(report["initramfs_sha256"],
@@ -518,3 +527,196 @@ class BootImageTests(unittest.TestCase):
                     self.assertFalse((source / "target/nested-hyperv").exists())
                     self.assertFalse((source / "target/image-work").exists())
                     self.assertFalse((target / "mshv").exists())
+            self.assertEqual(build.call_count, 2)
+
+
+class SharedImageTests(unittest.TestCase):
+    @staticmethod
+    def build_fixture(output, kernel, initramfs, cmdline, esp, firmware):
+        output.mkdir()
+        disk = output / "boot.img"
+        disk.write_bytes(b"shared boot disk fixture")
+        shutil.copyfile(firmware, output / "firmware.fd")
+        (output / "grub.cfg").write_text(boot_image.grub_config(cmdline))
+        sources = {
+            **{name: esp / source for name, source in boot_image.ESP_COMPONENTS.items()},
+            "boot/vmlinuz": kernel, "boot/initramfs.cpio.gz": initramfs,
+        }
+        manifest = {
+            "cmdline": cmdline,
+            "files": {name: {"source": str(path), "sha256": boot_image.sha256(path)}
+                      for name, path in sources.items()},
+            "firmware_source": str(firmware),
+            "firmware_sha256": boot_image.sha256(firmware),
+            "disk_sha256": boot_image.sha256(disk),
+        }
+        (output / "manifest.json").write_text(json.dumps(manifest))
+        return disk
+
+    def test_identical_inputs_reuse_one_unchanged_image(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=self.build_fixture) as build:
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            cache = root / "boot"
+            disk = boot_image.prepare_image(cache, **inputs)
+            original = (disk.read_bytes(), disk.stat().st_mtime_ns)
+            self.assertEqual(boot_image.prepare_image(cache, **inputs), disk)
+            self.assertEqual((disk.read_bytes(), disk.stat().st_mtime_ns), original)
+            self.assertEqual(build.call_count, 1)
+            self.assertEqual(build.call_args.args[0].parent.parent, cache)
+            self.assertEqual(build.call_args.args[1:], (
+                inputs["kernel"], inputs["initramfs"],
+                boot_image.SHARED_CMDLINE, inputs["esp"], inputs["firmware"]))
+            self.assertEqual(len(disk.parent.name), 64)
+            self.assertEqual({path.name for path in cache.iterdir()}, {".lock", disk.parent.name})
+
+    def test_concurrent_preparation_builds_once(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=self.build_fixture) as build:
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            barrier = threading.Barrier(8)
+
+            def prepare(_):
+                barrier.wait(timeout=20)
+                return boot_image.prepare_image(root / "boot", **inputs)
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                disks = list(executor.map(prepare, range(8)))
+            self.assertEqual(len(set(disks)), 1)
+            self.assertEqual(build.call_count, 1)
+            self.assertEqual(list((root / "boot").glob("*/boot.img")), [disks[0]])
+
+    def test_every_boot_input_change_gets_a_new_immutable_image(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=self.build_fixture) as build:
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            cache = root / "boot"
+            original = boot_image.prepare_image(cache, **inputs)
+            disks = {original}
+            sources = [
+                inputs["kernel"], inputs["initramfs"], inputs["firmware"],
+                *(inputs["esp"] / name for name in boot_image.ESP_COMPONENTS.values()),
+            ]
+            for path in sources:
+                with self.subTest(path=path):
+                    data = path.read_bytes()
+                    path.write_bytes(data + b"\0")
+                    disk = boot_image.prepare_image(cache, **inputs)
+                    self.assertNotIn(disk, disks)
+                    disks.add(disk)
+                    path.write_bytes(data)
+            self.assertEqual(boot_image.prepare_image(cache, **inputs), original)
+            self.assertEqual(build.call_count, len(sources) + 1)
+            self.assertTrue(all(disk.is_file() for disk in disks))
+
+    def test_changed_boot_configuration_gets_a_new_image(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=self.build_fixture):
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            cache = root / "boot"
+            original = boot_image.prepare_image(cache, **inputs)
+            config = boot_image.grub_config(boot_image.SHARED_CMDLINE)
+            for name, value in (
+                    ("SHARED_CMDLINE", boot_image.SHARED_CMDLINE + " quiet"),
+                    ("grub_config", lambda _: config + "# changed fixture\n")):
+                with self.subTest(name=name), patch.object(boot_image, name, value):
+                    self.assertNotEqual(boot_image.prepare_image(cache, **inputs), original)
+            self.assertEqual(boot_image.prepare_image(cache, **inputs), original)
+
+    def test_identical_bytes_at_different_source_paths_reuse_the_image(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=self.build_fixture) as build:
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            copied = root / "copied"
+            shutil.copytree(root / "inputs", copied)
+            copies = {name: copied / path.relative_to(root / "inputs")
+                      for name, path in inputs.items()}
+            disk = boot_image.prepare_image(root / "boot", **inputs)
+            self.assertEqual(boot_image.prepare_image(root / "boot", **copies), disk)
+            self.assertEqual(build.call_count, 1)
+
+    def test_corrupt_or_missing_cache_files_fail_without_rebuilding(self):
+        for name in ("boot.img", "firmware.fd", "grub.cfg", "manifest.json"):
+            for missing in (False, True):
+                with self.subTest(name=name, missing=missing), \
+                     tempfile.TemporaryDirectory() as work, \
+                     patch.object(boot_image, "build_image",
+                                  side_effect=self.build_fixture) as build:
+                    root = Path(work)
+                    inputs = boot_inputs(root / "inputs")
+                    disk = boot_image.prepare_image(root / "boot", **inputs)
+                    path = disk.parent / name
+                    if missing:
+                        path.unlink()
+                    else:
+                        path.write_bytes(b"corrupt")
+                    with self.assertRaisesRegex(RuntimeError, "boot image"):
+                        boot_image.prepare_image(root / "boot", **inputs)
+                    self.assertEqual(build.call_count, 1)
+
+    def test_invalid_manifest_shapes_fail_explicitly(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=self.build_fixture) as build:
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            disk = boot_image.prepare_image(root / "boot", **inputs)
+            for data in (None, [], {}, {"files": []}, {"files": {"boot/vmlinuz": None}}):
+                with self.subTest(data=data):
+                    (disk.parent / "manifest.json").write_text(json.dumps(data))
+                    with self.assertRaisesRegex(RuntimeError, "Cannot verify shared boot image"):
+                        boot_image.prepare_image(root / "boot", **inputs)
+            self.assertEqual(build.call_count, 1)
+
+    def test_failed_construction_cleans_staging_and_allows_retry(self):
+        def fail(output, *args):
+            output.mkdir()
+            (output / "boot.img").write_bytes(b"partial image")
+            raise RuntimeError("Image construction failed")
+
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            cache = root / "boot"
+            with patch.object(boot_image, "build_image", side_effect=fail), \
+                 self.assertRaisesRegex(RuntimeError, "Image construction failed"):
+                boot_image.prepare_image(cache, **inputs)
+            self.assertEqual({path.name for path in cache.iterdir()}, {".lock"})
+            with patch.object(boot_image, "build_image", side_effect=self.build_fixture):
+                self.assertTrue(boot_image.prepare_image(cache, **inputs).is_file())
+
+    def test_input_changes_during_construction_are_not_published(self):
+        for name in ("kernel", "firmware"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as work:
+                root = Path(work)
+                inputs = boot_inputs(root / "inputs")
+                cache = root / "boot"
+
+                def mutate(*args):
+                    disk = self.build_fixture(*args)
+                    inputs[name].write_bytes(b"changed input")
+                    return disk
+
+                with patch.object(boot_image, "build_image", side_effect=mutate), \
+                     self.assertRaisesRegex(RuntimeError, "Boot inputs changed"):
+                    boot_image.prepare_image(cache, **inputs)
+                self.assertEqual({path.name for path in cache.iterdir()}, {".lock"})
+
+    def test_unverified_construction_is_not_published(self):
+        def corrupt(*args):
+            disk = self.build_fixture(*args)
+            disk.write_bytes(b"corrupt disk")
+            return disk
+
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(boot_image, "build_image", side_effect=corrupt):
+            root = Path(work)
+            inputs = boot_inputs(root / "inputs")
+            cache = root / "boot"
+            with self.assertRaisesRegex(RuntimeError, "Shared boot image verification failed"):
+                boot_image.prepare_image(cache, **inputs)
+            self.assertEqual({path.name for path in cache.iterdir()}, {".lock"})
