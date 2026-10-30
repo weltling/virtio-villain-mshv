@@ -30,6 +30,11 @@ def install_build_fixture(root, framework):
         destination = root / "lib" / name
         if not destination.exists():
             shutil.copyfile(ROOT / "lib" / name, destination)
+    (root / "kernel").mkdir(exist_ok=True)
+    for source in (ROOT / "kernel").glob("*.config"):
+        destination = root / "kernel" / source.name
+        if not destination.exists():
+            shutil.copyfile(source, destination)
     (root / "lib/suite.py").write_text(
         "from pathlib import Path\n"
         "from villain.appliance import Suite\n"
@@ -43,6 +48,39 @@ def install_build_fixture(root, framework):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("/* fixture source */\n")
+
+
+class KernelConfigTests(unittest.TestCase):
+    def test_x86_fragments_preserve_required_appliance_options(self):
+        fragments = [
+            {line for line in (ROOT / "kernel" / name).read_text().splitlines()
+             if line.startswith("CONFIG_")}
+            for name in ("common.config", "x86_64.config")]
+        common, x86 = fragments
+        self.assertTrue(common.isdisjoint(x86))
+        self.assertEqual(x86, {
+            "CONFIG_EFI_HANDOVER_PROTOCOL=y", "CONFIG_SERIAL_8250_CONSOLE=y"})
+        self.assertEqual(common | x86, {
+            "CONFIG_64BIT=y", "CONFIG_MSHV_ROOT=y", "CONFIG_HYPERV=y",
+            "CONFIG_HYPERV_VMBUS=y", "CONFIG_EFI_STUB=y",
+            "CONFIG_EFI_HANDOVER_PROTOCOL=y", "CONFIG_BLK_DEV_INITRD=y",
+            "CONFIG_RD_GZIP=y", "CONFIG_BINFMT_ELF=y",
+            "CONFIG_SERIAL_8250_CONSOLE=y", "CONFIG_DEVTMPFS=y",
+            "CONFIG_PROC_FS=y", "CONFIG_SYSFS=y"})
+
+    def test_arm64_fragment_requires_4k_pages_without_x86_boot_options(self):
+        common, arm = [
+            {line for line in (ROOT / "kernel" / name).read_text().splitlines()
+             if line.startswith("CONFIG_")}
+            for name in ("common.config", "aarch64.config")]
+        self.assertTrue(common.isdisjoint(arm))
+        self.assertTrue({
+            "CONFIG_ARM64=y", "CONFIG_ARM64_4K_PAGES=y", "CONFIG_EFI=y",
+            "CONFIG_ACPI=y", "CONFIG_SERIAL_AMBA_PL011=y",
+            "CONFIG_SERIAL_AMBA_PL011_CONSOLE=y"}.issubset(arm))
+        self.assertIn("CONFIG_MSHV_ROOT=y", common | arm)
+        self.assertNotIn("CONFIG_EFI_HANDOVER_PROTOCOL=y", common | arm)
+        self.assertNotIn("CONFIG_SERIAL_8250_CONSOLE=y", common | arm)
 
 
 @unittest.skipUnless(shutil.which("make"), "Make required for build checks")
@@ -216,6 +254,7 @@ class BuildTests(unittest.TestCase):
             fragment.write_text("CONFIG_FIXTURE=y\n")
             rust.write_text("CONFIG_RUSTC_VERSION=1\nCONFIG_RUSTC_LLVM_VERSION=1\n")
             default = root / "target/kernel"
+            strict_output = root / "strict-kernel"
             custom = root / "custom-kernel"
             rust_output = root / "rust-kernel"
             environment = dict(os.environ, RUSTC="rustc")
@@ -223,8 +262,10 @@ class BuildTests(unittest.TestCase):
             cases = (
                 ([], [config], "false", default),
                 (["KERNEL_CONFIGS=   "], [config], "false", default),
-                ([f'KERNEL_CONFIGS="{config}"'], [config], "false", default),
-                ([f'KERNEL_CONFIGS="{config}"', "RUSTC=false"], [config], "false", default),
+                ([f'KERNEL_CONFIGS="{config}"', f"KERNEL_ARGS=--output {strict_output}"],
+                 [config], "false", strict_output),
+                ([f'KERNEL_CONFIGS="{config}"', "RUSTC=false",
+                  f"KERNEL_ARGS=--output {strict_output}"], [config], "false", strict_output),
                 ([f"KERNEL_CONFIGS={base} {fragment}",
                   f"KERNEL_ARGS=--output {custom} --jobs 2"], [base, fragment], "false", custom),
                 ([f"KERNEL_CONFIGS={rust}", "RUSTC=rustc",
@@ -244,9 +285,20 @@ class BuildTests(unittest.TestCase):
                     command = json.loads(record.read_text())
                     self.assertEqual(command["rustc"], compiler)
                     arguments = command["argv"]
+                    default_config = not any(
+                        arg.startswith("KERNEL_CONFIGS=") and arg.split("=", 1)[1].strip()
+                        for arg in overrides)
+                    expected_configs = ([root / "kernel/common.config",
+                                         root / "kernel/x86_64.config"]
+                                        if default_config else configs)
                     self.assertEqual([
                         arguments[index + 1] for index, argument in enumerate(arguments)
-                        if argument == "--config"], [str(path) for path in configs])
+                        if argument == "--config"], [str(path) for path in expected_configs])
+                    if default_config:
+                        self.assertEqual(arguments[arguments.index("--base-config") + 1],
+                                         str(config))
+                    else:
+                        self.assertNotIn("--base-config", arguments)
                     self.assertIn("--offline", arguments)
                     self.assertTrue((root / "target/mshv/initramfs.cpio.gz").is_file())
                     self.assertTrue(
