@@ -29,18 +29,20 @@ class MshvSuite(Suite):
 
     def add_arguments(self, parser):
         parser.epilog = (
-            "MSHV_VMM selects the default Cloud Hypervisor or OpenVMM executable. "
-            "OpenVMM uses KVM and requires --firmware with MSVM.fd. "
+            "Use --vmm to select the Cloud Hypervisor or OpenVMM executable. "
+            "OpenVMM uses KVM and local MSVM.fd prepared with make openvmm-firmware. "
             f"Cloud Hypervisor prefers installed UEFI firmware at {FIRMWARE}, otherwise download "
             "the latest cloud-hypervisor/edk2 CLOUDHV.fd with SHA256 verification. "
             "Boot files are checked before launching tests. "
             "Use make help in the suite directory for kernel config and build options.")
-        parser.add_argument("--vmm", default=os.environ.get("MSHV_VMM", "cloud-hypervisor"),
+        parser.add_argument("--vmm", default="cloud-hypervisor",
                             help="Cloud Hypervisor MSHV or OpenVMM executable")
         parser.add_argument("--backend", choices=("auto", "ch", "openvmm"), default="auto",
                             help="VMM backend (default: OpenVMM when its name contains "
                             "'openvmm', otherwise Cloud Hypervisor)")
-        parser.add_argument("--firmware", type=Path, help="Explicit local UEFI firmware")
+        parser.add_argument("--firmware", type=Path,
+                            help="Local UEFI firmware override (OpenVMM default: selected "
+                            "build output openvmm-firmware/MSVM.fd)")
         parser.add_argument("--esp", type=Path,
                             help="Local boot components (default: selected build output "
                             "mshv-boot-inputs/esp, prepared with make esp)")
@@ -59,7 +61,13 @@ class MshvSuite(Suite):
         backend = vmm_backend(args.vmm, args.backend)
         if isinstance(backend, OpenVmm):
             if args.firmware is None:
-                raise RuntimeError("OpenVMM requires --firmware PATH to its MSVM.fd UEFI image")
+                context = self.build_spec.context(args.build_dir)
+                args.firmware = context.target / "openvmm-firmware/MSVM.fd"
+                if not args.firmware.is_file():
+                    raise RuntimeError(
+                        f"No prepared OpenVMM firmware at {args.firmware}. "
+                        "Run make openvmm-firmware with the matching TARGET "
+                        "or select --firmware PATH.")
             args.firmware = args.firmware.resolve()
         else:
             args.firmware = resolve_firmware(args.firmware, offline=args.offline)

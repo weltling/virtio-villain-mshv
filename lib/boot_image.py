@@ -6,7 +6,6 @@ import argparse
 import gzip
 import hashlib
 import json
-import os
 from pathlib import Path
 import shlex
 import shutil
@@ -250,7 +249,7 @@ def resolve_firmware(firmware=None, *, offline=False):
     except FileNotFoundError:
         from villain.artifacts import github_release_asset
 
-        cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        cache = ROOT / "target"
         return github_release_asset(
             FIRMWARE_REPOSITORY, FIRMWARE_ASSET,
             cache / "virtio-villain/firmware", offline=offline).resolve()
@@ -306,7 +305,7 @@ def build_image(output, kernel, initramfs, cmdline, esp, firmware=FIRMWARE):
 
 
 def main():
-    framework = Path(os.environ.get("VV_ROOT", ROOT.parent / "virtio-villain"))
+    framework = ROOT.parent / "virtio-villain"
     sys.path.insert(0, str(framework / "lib/python"))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True,

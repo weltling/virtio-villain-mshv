@@ -7,6 +7,6 @@ from pathlib import Path
 import sys
 
 root = Path(__file__).resolve().parent
-framework = Path(os.environ.get("VV_ROOT", root.parent / "virtio-villain")).resolve()
+framework = (root.parent / "virtio-villain").resolve()
 os.execv(str(framework / "run"),
          [str(framework / "run"), "--suite", str(root), *sys.argv[1:]])
