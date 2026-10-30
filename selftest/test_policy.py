@@ -409,6 +409,7 @@ class PolicyTests(unittest.TestCase):
                 spawn.assert_called_once_with([
                     binary, "--hypervisor", "kvm", "-m", "2G", "-p", "2",
                     "--com1", "stderr", "--nested-virt",
+                    "--pcie-root-complex", "rc0,segment=1",
                     "--uefi", f"firmware={output / 'firmware.fd'},console=com1",
                     "--disk", "file:/disk,ro",
                     "--guest-shutdown-action", "exit", "--guest-reset-action", "exit",
