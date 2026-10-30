@@ -59,14 +59,15 @@ class KernelConfigTests(unittest.TestCase):
         common, x86 = fragments
         self.assertTrue(common.isdisjoint(x86))
         self.assertEqual(x86, {
-            "CONFIG_EFI_HANDOVER_PROTOCOL=y", "CONFIG_SERIAL_8250_CONSOLE=y"})
+            "CONFIG_EFI_HANDOVER_PROTOCOL=y", "CONFIG_SERIAL_8250_CONSOLE=y",
+            "CONFIG_DMI=y", "CONFIG_DMIID=y"})
         self.assertEqual(common | x86, {
             "CONFIG_64BIT=y", "CONFIG_MSHV_ROOT=y", "CONFIG_HYPERV=y",
             "CONFIG_HYPERV_VMBUS=y", "CONFIG_EFI_STUB=y",
             "CONFIG_EFI_HANDOVER_PROTOCOL=y", "CONFIG_BLK_DEV_INITRD=y",
             "CONFIG_RD_GZIP=y", "CONFIG_BINFMT_ELF=y",
             "CONFIG_SERIAL_8250_CONSOLE=y", "CONFIG_DEVTMPFS=y",
-            "CONFIG_PROC_FS=y", "CONFIG_SYSFS=y"})
+            "CONFIG_PROC_FS=y", "CONFIG_SYSFS=y", "CONFIG_DMI=y", "CONFIG_DMIID=y"})
 
     def test_arm64_fragment_requires_4k_pages_without_x86_boot_options(self):
         common, arm = [
