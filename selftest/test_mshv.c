@@ -733,9 +733,9 @@ int main(void)
 
     const struct vv_test_entry *lifecycle = NULL, *single = NULL, *negative = NULL;
     const struct vv_test_entry *isolation = NULL, *concurrent = NULL, *unwind = NULL;
-    const char *tlfs_names[] = {"TL0001", "TL0002", "TL0003"};
-    const struct vv_test_entry *tlfs[3] = {0};
-    int tlfs_calls[3], tlfs_opens[3], tlfs_closes[3], tlfs_fds[3];
+    const char *tlfs_names[] = {"TL0001", "TL0002", "TL0003", "TL0004"};
+    const struct vv_test_entry *tlfs[4] = {0};
+    int tlfs_calls[4], tlfs_opens[4], tlfs_closes[4], tlfs_fds[4];
     int isolation_calls = 0, isolation_opens = 0, isolation_closes = 0, isolation_fds = 0;
     int concurrent_opens = 0, concurrent_closes = 0, concurrent_fds = 0;
     int unwind_calls = 0, unwind_opens = 0, unwind_closes = 0, unwind_fds = 0;
@@ -962,6 +962,11 @@ int main(void)
     wrong_index = 1;
     assert(execute(tlfs[2]) == TEST_FAIL);
     wrong_index = 0;
+    for (int mode = 1; mode <= 5; ++mode) {
+        corrupt_cpuid = mode;
+        assert(execute(tlfs[3]) == TEST_FAIL);
+    }
+    corrupt_cpuid = 0;
     puts("mshv TLFS mock checks passed");
     struct mshv_fixture f = {.device = -1, .partition = -1, .vp = -1};
     assert(mshv_roundtrip(&f, 0, 0) == TEST_FAIL);
