@@ -325,14 +325,15 @@ kernel builds, downloaded boot inputs, caches and saved results.
 
 ## Running tests
 
-Use `./run --list` to list test IDs and descriptions without building.
-IDs have a category prefix and four digits and can be supplied in any
-letter case. Rebuild after adding or changing tests.
+Use `./run --list` for the padded test listing without building. Every test reserves the version and section columns on the right. Reference values are empty where no formal specification applies. Long titles stop before those columns. Use `./run --list-tsv` for the complete tab separated catalog with all four fields and no truncation. IDs have a category prefix and four digits and can be supplied in any letter case.
 
 | Prefix | Category | Sources |
 | --- | --- | --- |
 | ML | Partition lifecycle and related operations | [tests/ml](./tests/ml) |
 | MR | Virtual processor registers and state | [tests/mr](./tests/mr) |
+| TL | Hyper-V behavior specified by TLFS | [tests/tlfs](./tests/tlfs) |
+
+TL tests check requirements from the [Hypervisor Top-Level Functional Specification 6.0b](https://github.com/MicrosoftDocs/Virtualization-Documentation/raw/live/tlfs/Hypervisor%20Top%20Level%20Functional%20Specification%20v6.0b.pdf) through MSHV. Each registration records the released specification version and numbered section, as Virtio Villain does for Virtio. These appear in `./run --list`, padded result columns and `results.json`. Console output includes the same reference before a test runs. Each source identifies the tested requirement and required features. A TL failure can indicate a mismatch in either the kernel interface or the Hyper-V implementation. ML and MR cover Linux UAPI behavior such as descriptor lifetime and ioctl argument validation.
 
 Omitting IDs runs all tests. Each test and repetition gets a fresh VM.
 The suite boots nested Hyper-V before Linux so that the test kernel can
