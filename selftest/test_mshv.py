@@ -6,11 +6,14 @@ import errno
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK = (ROOT.parent / "virtio-villain").resolve()
+sys.path.insert(0, str(FRAMEWORK / "lib/python"))
+from villain import appliance  # noqa: E402
 
 
 class AbiTests(unittest.TestCase):
@@ -25,6 +28,29 @@ class AbiTests(unittest.TestCase):
                 self.assertIn(f"REGISTER_MSHV_TEST({source.stem.split('_')[0].upper()},", text)
                 self.assertIn(source.parent.name, prefixes)
                 self.assertEqual(prefixes[source.parent.name], source.stem[:2])
+
+    def test_tlfs_sources_identify_requirements(self):
+        sources = sorted((ROOT / "tests/tlfs").glob("*.c"))
+        expected = {
+            "TL0001": "7.8",
+            "TL0002": "7.10.1",
+            "TL0003": "7.2",
+            "TL0004": "2.4",
+            "TL0005": "9.4",
+            "TL0006": "11.9"}
+        catalog = appliance.source_catalog(
+            sources, "REGISTER_MSHV_TEST", metadata=True, definitions=[ROOT / "lib/mshv.h"])
+        self.assertEqual(set(catalog), set(expected))
+        for source in sources:
+            with self.subTest(source=source.name):
+                text = source.read_text()
+                name = source.stem.split("_")[0].upper()
+                self.assertEqual(catalog[name][1:], ("6.0b", expected[name]))
+                self.assertRegex(catalog[name][2], r"^\d+(?:\.\d+)+$")
+                self.assertIn(f"TLFS 6.0b section {expected[name]}", text)
+                self.assertIn("TLFS_SPEC_V6_0B,", text)
+                self.assertNotIn("TLFS@", text)
+                self.assertIn("Requires ", text)
 
 
 @unittest.skipUnless(shutil.which("cc"), "C compiler required for fixture selftests")
@@ -102,6 +128,10 @@ class FixtureTests(unittest.TestCase):
                 "mshv-unwind completed 64 cycles, 512 partition and 512 VP EMFILE failures",
                 result.stdout)
             self.assertIn("mshv unwind mock checks passed", result.stdout)
+            self.assertIn("mshv TLFS mock checks passed", result.stdout)
+            self.assertIn(
+                "mshv-register unexpected write readback name=0x20011 high=0x0 low=0x0",
+                result.stdout)
 
 
 if __name__ == "__main__":
