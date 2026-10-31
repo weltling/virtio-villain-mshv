@@ -16,13 +16,15 @@ FRAMEWORK = (ROOT.parent / "virtio-villain").resolve()
 class AbiTests(unittest.TestCase):
     def test_one_case_per_source(self):
         sources = sorted((ROOT / "tests").glob("*/*.c"))
+        prefixes = {"ml": "ml", "mr": "mr", "tlfs": "tl"}
         self.assertTrue(sources)
         for source in sources:
             with self.subTest(source=source.name):
                 text = source.read_text()
                 self.assertEqual(text.count("REGISTER_MSHV_TEST("), 1)
                 self.assertIn(f"REGISTER_MSHV_TEST({source.stem.split('_')[0].upper()},", text)
-                self.assertEqual(source.parent.name, source.stem[:2])
+                self.assertIn(source.parent.name, prefixes)
+                self.assertEqual(prefixes[source.parent.name], source.stem[:2])
 
 
 @unittest.skipUnless(shutil.which("cc"), "C compiler required for fixture selftests")
@@ -44,9 +46,11 @@ class FixtureTests(unittest.TestCase):
                        "-pthread", "-Wl,--wrap=open,--wrap=close,--wrap=fcntl,--wrap=ioctl",
                        "-Wl,--wrap=getrlimit,--wrap=setrlimit",
                        "-o", str(binary)]
-            subprocess.run(command, check=True, capture_output=True)
+            compiled = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
             result = subprocess.run(
-                [str(binary)], check=True, capture_output=True, text=True)
+                [str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout[-4096:])
             self.assertIn(
                 "MSHV_CREATE_PARTITION flags=0xabc isolation=0x123456789abcdef0: "
                 f"expected resource fd >= 0, actual -1 errno={errno.EACCES}",
