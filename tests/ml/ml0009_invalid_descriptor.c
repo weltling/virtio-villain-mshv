@@ -46,4 +46,4 @@ static test_result_t invalid_descriptor(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0009, invalid_descriptor,
-                   "Invalid file descriptor rejection across all defined IOCTLs");
+                   "Invalid file descriptor rejection across all defined IOCTLs", "", "");

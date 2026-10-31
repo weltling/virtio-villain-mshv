@@ -74,4 +74,4 @@ static test_result_t creation_boundaries(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0011, creation_boundaries,
-                   "Creation parameter boundary rejection for partitions and processors");
+                   "Creation parameter boundary rejection for partitions and processors", "", "");

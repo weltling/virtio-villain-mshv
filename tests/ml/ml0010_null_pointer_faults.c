@@ -43,4 +43,4 @@ static test_result_t null_pointer_faults(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0010, null_pointer_faults,
-                   "Pointer argument fault validation across valid descriptor types");
+                   "Pointer argument fault validation across valid descriptor types", "", "");

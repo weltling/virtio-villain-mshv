@@ -41,4 +41,4 @@ static test_result_t vp_cpuid(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(MR0004, vp_cpuid,
-                   "Virtual processor CPUID query and argument fault validation");
+                   "Virtual processor CPUID query and argument fault validation", "", "");

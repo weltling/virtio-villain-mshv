@@ -37,4 +37,5 @@ static test_result_t repeated(struct mshv_fixture *f)
     return TEST_PASS;
 }
 
-REGISTER_MSHV_TEST(ML0004, repeated, "128 lifecycle cycles alternating parent closure orders");
+REGISTER_MSHV_TEST(ML0004, repeated, "128 lifecycle cycles alternating parent closure orders",
+                   "", "");

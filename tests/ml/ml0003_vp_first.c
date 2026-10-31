@@ -31,4 +31,5 @@ static test_result_t vp_first(struct mshv_fixture *f)
     return mshv_roundtrip(f, 1, VV_GPR_SEED_VP_FIRST);
 }
 
-REGISTER_MSHV_TEST(ML0003, vp_first, "VP-first closure, exact EEXIST, then usable new VP");
+REGISTER_MSHV_TEST(ML0003, vp_first, "VP-first closure, exact EEXIST, then usable new VP",
+                   "", "");

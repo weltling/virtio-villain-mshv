@@ -61,4 +61,5 @@ static test_result_t negative(struct mshv_fixture *f)
     return TEST_PASS;
 }
 
-REGISTER_MSHV_TEST(MR0003, negative, "Exact EINVAL/EFAULT checks, each followed by a valid roundtrip");
+REGISTER_MSHV_TEST(MR0003, negative, "Exact EINVAL/EFAULT checks, each followed by a valid roundtrip",
+                   "", "");

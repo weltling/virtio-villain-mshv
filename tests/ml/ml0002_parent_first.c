@@ -25,4 +25,5 @@ static test_result_t parent_first(struct mshv_fixture *f)
     return mshv_roundtrip(f, 1, VV_GPR_SEED_DESCENDING);
 }
 
-REGISTER_MSHV_TEST(ML0002, parent_first, "VP register access after closing both parent descriptors");
+REGISTER_MSHV_TEST(ML0002, parent_first, "VP register access after closing both parent descriptors",
+                   "", "");

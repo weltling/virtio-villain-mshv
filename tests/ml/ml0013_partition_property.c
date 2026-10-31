@@ -41,4 +41,4 @@ static test_result_t partition_property(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0013, partition_property,
-                   "Partition property query and update pointer validation");
+                   "Partition property query and update pointer validation", "", "");

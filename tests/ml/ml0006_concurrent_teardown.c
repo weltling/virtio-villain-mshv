@@ -133,4 +133,4 @@ stop:
 }
 
 REGISTER_MSHV_TEST(ML0006, concurrent_teardown,
-                   "Partition teardown concurrent with another partition's VP access");
+                   "Partition teardown concurrent with another partition's VP access", "", "");

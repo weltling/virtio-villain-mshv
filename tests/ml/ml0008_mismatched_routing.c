@@ -51,4 +51,4 @@ static test_result_t mismatched_routing(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0008, mismatched_routing,
-                   "Mismatched descriptor routing rejection across all defined IOCTLs");
+                   "Mismatched descriptor routing rejection across all defined IOCTLs", "", "");

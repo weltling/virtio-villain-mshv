@@ -56,4 +56,4 @@ static test_result_t uninitialized_partition(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0012, uninitialized_partition,
-                   "Uninitialized partition rejection and idempotent initialization");
+                   "Uninitialized partition rejection and idempotent initialization", "", "");

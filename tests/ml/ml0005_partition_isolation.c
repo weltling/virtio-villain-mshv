@@ -70,4 +70,4 @@ out:
 }
 
 REGISTER_MSHV_TEST(ML0005, partition_isolation,
-                   "Independent partition state across 32 alternating teardown cycles");
+                   "Independent partition state across 32 alternating teardown cycles", "", "");

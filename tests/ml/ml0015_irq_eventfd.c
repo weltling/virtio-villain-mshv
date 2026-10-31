@@ -78,4 +78,4 @@ static test_result_t irq_eventfd(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(ML0015, irq_eventfd,
-                   "Interrupt and eventfd registration parameter boundary checks");
+                   "Interrupt and eventfd registration parameter boundary checks", "", "");

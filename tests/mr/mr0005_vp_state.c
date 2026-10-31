@@ -74,4 +74,4 @@ static test_result_t vp_state(struct mshv_fixture *f)
 }
 
 REGISTER_MSHV_TEST(MR0005, vp_state,
-                   "Virtual processor state buffer alignment and size validation");
+                   "Virtual processor state buffer alignment and size validation", "", "");

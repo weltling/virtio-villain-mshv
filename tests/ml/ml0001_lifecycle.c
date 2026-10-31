@@ -21,4 +21,5 @@ static test_result_t lifecycle(struct mshv_fixture *f)
     return mshv_roundtrip(f, 1, VV_GPR_SEED_LIFECYCLE);
 }
 
-REGISTER_MSHV_TEST(ML0001, lifecycle, "Create, initialize twice, create VP, use descriptors");
+REGISTER_MSHV_TEST(ML0001, lifecycle, "Create, initialize twice, create VP, use descriptors",
+                   "", "");

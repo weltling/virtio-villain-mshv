@@ -21,4 +21,4 @@ static test_result_t batch(struct mshv_fixture *f)
     return mshv_roundtrip(f, 4, VV_GPR_SEED_DESCENDING);
 }
 
-REGISTER_MSHV_TEST(MR0002, batch, "Four-register GPR batches with distinct exact values");
+REGISTER_MSHV_TEST(MR0002, batch, "Four-register GPR batches with distinct exact values", "", "");

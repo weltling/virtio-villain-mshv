@@ -173,6 +173,7 @@ enum vv_hyperv_partition_property {
 
 #define HV_TRANSLATE_GVA_VALIDATE_READ UINT64_C(0x0001)
 #define HV_TRANSLATE_GVA_VALIDATE_WRITE UINT64_C(0x0002)
+/* MSHV extends the TLFS 6.0b flags with explicit supervisor access context. */
 #define HV_TRANSLATE_GVA_SUPERVISOR_ACCESS UINT64_C(0x0040)
 
 enum vv_hvcall_expectation {
@@ -186,8 +187,10 @@ struct mshv_fixture {
     int vp;
 };
 
-#define REGISTER_MSHV_TEST(name, func, description) \
-    VV_REGISTER_TEST(mshv_registry, name, func, description)
+#define TLFS_SPEC_V6_0B "6.0b"
+
+#define REGISTER_MSHV_TEST(name, func, description, specver, sect) \
+    VV_REGISTER_TEST_SPEC(mshv_registry, name, func, description, specver, sect)
 
 extern const struct vv_test_entry __start_mshv_registry[];
 extern const struct vv_test_entry __stop_mshv_registry[];

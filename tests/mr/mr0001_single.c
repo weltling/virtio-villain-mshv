@@ -23,4 +23,4 @@ static test_result_t single(struct mshv_fixture *f)
     return TEST_PASS;
 }
 
-REGISTER_MSHV_TEST(MR0001, single, "Single RAX roundtrips including all bits set");
+REGISTER_MSHV_TEST(MR0001, single, "Single RAX roundtrips including all bits set", "", "");
