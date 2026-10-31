@@ -26,7 +26,9 @@ def vmm_backend(binary, backend):
 
 class MshvSuite(Suite):
     def list_tests(self, binary):
-        return source_catalog(test_sources(ROOT), "REGISTER_MSHV_TEST")
+        return source_catalog(
+            test_sources(ROOT), "REGISTER_MSHV_TEST", metadata=True,
+            definitions=[ROOT / "lib/mshv.h"])
 
     def add_arguments(self, parser):
         parser.epilog = (

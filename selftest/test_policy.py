@@ -103,6 +103,7 @@ class PolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "lib").mkdir()
+            (root / "lib/mshv.h").write_text('#define TLFS_SPEC_V6_0B "6.0b"\n')
             framework = root / "framework"
             framework.mkdir()
             record = root / "sources"
@@ -120,18 +121,18 @@ class PolicyTests(unittest.TestCase):
             for name in ("ML010", "MR020"):
                 path = paths[name]
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(f'REGISTER_MSHV_TEST({name}, test, "Fixture {name}");\n')
+                path.write_text(f'REGISTER_MSHV_TEST({name}, test, "Fixture {name}", "", "");\n')
             ignored = root / "tests/ml/nested/ignored.c"
             ignored.parent.mkdir()
-            ignored.write_text('REGISTER_MSHV_TEST(XX001, test, "Ignored");\n')
+            ignored.write_text('REGISTER_MSHV_TEST(XX001, test, "Ignored", "", "");\n')
             (root / "tests/ignored.c").write_text(
-                'REGISTER_MSHV_TEST(XX002, test, "Ignored");\n')
+                'REGISTER_MSHV_TEST(XX002, test, "Ignored", "", "");\n')
             for names in (
                     ("ML010", "MR020"), ("ML010", "ML030", "MR020"), ("ML030", "MR020")):
                 with self.subTest(names=names):
                     if "ML030" in names:
                         paths["ML030"].write_text(
-                            'REGISTER_MSHV_TEST(ML030, test, "Fixture ML030");\n')
+                            'REGISTER_MSHV_TEST(ML030, test, "Fixture ML030", "", "");\n')
                     if "ML010" not in names:
                         paths["ML010"].unlink()
                     subprocess.run([
@@ -144,7 +145,7 @@ class PolicyTests(unittest.TestCase):
                     self.assertEqual(record.read_text().split(), list(map(str, expected)))
                     with patch.dict(suite.list_tests.__globals__, {"ROOT": root}):
                         self.assertEqual(suite.list_tests(None), {
-                            name: f"Fixture {name}" for name in names})
+                            name: (f"Fixture {name}", "", "") for name in names})
 
     def test_execution_help_exposes_arguments_and_build_help(self):
         with contextlib.redirect_stdout(io.StringIO()) as output, \
@@ -199,21 +200,40 @@ class PolicyTests(unittest.TestCase):
                              str(args.workspace / "boot"))
 
     def test_source_listing_without_an_appliance_binary(self):
-        output = io.StringIO()
-        with patch.object(appliance.subprocess, "run",
-                          side_effect=AssertionError("Listing must not execute a binary")), \
-             contextlib.redirect_stdout(output):
-            status = appliance.main([
-                "--suite", str(ROOT),
-                "--binary", "/nonexistent/mshv-init", "--list"])
-        self.assertEqual(status, 0)
-        entries = appliance.parse_catalog(output.getvalue())
+        outputs = {}
+        for option in ("--list", "--list-tsv"):
+            with self.subTest(option=option), \
+                 patch.object(appliance.subprocess, "run",
+                              side_effect=AssertionError("Listing must not execute a binary")), \
+                 patch.object(appliance.reporting, "terminal_width", return_value=80), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(appliance.main([
+                    "--suite", str(ROOT),
+                    "--binary", "/nonexistent/mshv-init", option]), 0)
+            outputs[option] = output.getvalue()
+        for line in outputs["--list-tsv"].splitlines():
+            fields = line.split("\t")
+            with self.subTest(name=fields[0]):
+                self.assertEqual(len(fields), 4)
+                if fields[0].startswith(("ML", "MR")):
+                    self.assertEqual(fields[2:], ["", ""])
+        entries = appliance.parse_catalog(outputs["--list-tsv"], metadata=True)
+        self.assertNotIn("\t", outputs["--list"])
+        human_rows = outputs["--list"].splitlines()
+        self.assertEqual(
+            [line.split()[0] for line in human_rows], list(entries))
+        for line, (name, info) in zip(human_rows, entries.items()):
+            with self.subTest(name=name):
+                self.assertEqual(len(line), 80)
+                self.assertEqual(line[-12:], f"{info[1]:<4} {info[2]:<7}")
+                if len(info[0]) > 60:
+                    self.assertEqual(line[66], "~")
         sources = sorted(ROOT.glob("tests/*/*.c"))
         self.assertTrue(sources)
         self.assertEqual(list(entries), [
             source.stem.split("_", 1)[0].upper() for source in sources])
-        self.assertTrue(all(entries.values()))
-        self.assertTrue(all(not description[0].islower() for description in entries.values()))
+        self.assertTrue(all(info[0] for info in entries.values()))
+        self.assertTrue(all(not info[0][0].islower() for info in entries.values()))
 
     def test_nested_execution_without_external_control(self):
         suite = appliance.load_suite(ROOT)
