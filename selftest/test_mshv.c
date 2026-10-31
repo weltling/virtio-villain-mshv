@@ -20,6 +20,9 @@ static struct rlimit mock_limit = {4096, 4096};
 static int get_limits, set_limits, fail_get_limit, fail_set_limit_at;
 static int partition_rejections, vp_rejections, damage_unwind, retain_failed_vp;
 static int unexpected_creation;
+static int corrupt_high, corrupt_xmm, shared_vps, wrong_index;
+static int accept_bad_write, missing_hv_status, short_reps;
+static int corrupt_cpuid, corrupt_translation, corrupt_synic;
 static pthread_mutex_t mock_lock = PTHREAD_MUTEX_INITIALIZER;
 static int fd_flags = FD_CLOEXEC;
 static struct mock_partition {
@@ -28,6 +31,9 @@ static struct mock_partition {
     int broken;
     int vp_created[2];
     uint64_t values[2][4];
+    union hv_register_value xmm[2][2], cs[2];
+    uint64_t rflags[2], cr0[2], cr3[2], cr4[2], efer[2], features, flags;
+    struct mshv_user_mem_region memory;
 } partitions[2];
 static unsigned cpuid_ecx = HYPERV_HYPERVISOR_PRESENT_BIT;
 static unsigned cpuid_max = HYPERV_CPUID_FEATURES;
@@ -205,6 +211,150 @@ static int is_partition_request(unsigned long req)
     }
 }
 
+static int access_register(struct mock_partition *partition, unsigned index,
+                            struct hv_register_assoc *reg, int set)
+{
+    unsigned state_index = shared_vps ? 0 : index;
+    uint64_t *scalar = NULL;
+    union hv_register_value *wide = NULL;
+    if (reg->name >= VV_RAX && reg->name <= VV_RBX)
+        scalar = &partition->values[state_index][reg->name - VV_RAX];
+    else if (reg->name == VV_XMM0 || reg->name == VV_XMM1)
+        wide = &partition->xmm[state_index][reg->name - VV_XMM0];
+    else {
+        switch (reg->name) {
+        case VV_VP_INDEX:
+            if (set)
+                return accept_bad_write == 1 ? 0 : reject(EINVAL);
+            reg->value = (union hv_register_value){.reg64 = index + wrong_index};
+            return 0;
+        case VV_RFLAGS:
+            if (set && (!(reg->value.reg64 & 2) || (reg->value.reg64 & 8)) && !accept_bad_write)
+                return reject(EINVAL);
+            scalar = &partition->rflags[state_index];
+            break;
+        case VV_CR0:
+            scalar = &partition->cr0[state_index];
+            break;
+        case VV_CR3:
+            scalar = &partition->cr3[state_index];
+            break;
+        case VV_CR4:
+            scalar = &partition->cr4[state_index];
+            break;
+        case VV_EFER:
+            scalar = &partition->efer[state_index];
+            break;
+        case VV_CS:
+            wide = &partition->cs[state_index];
+            break;
+        default:
+            return reject(EINVAL);
+        }
+    }
+    if (set) {
+        if (scalar)
+            *scalar = reg->value.reg64;
+        else
+            *wide = reg->value;
+    } else {
+        if (scalar)
+            reg->value = (union hv_register_value){.reg64 = *scalar};
+        else
+            reg->value = *wide;
+        if (reg->name >= VV_RAX && reg->name <= VV_RBX) {
+            reg->value.reg64 ^= corrupt_read;
+            reg->value.words[1] = corrupt_high;
+        }
+        if (corrupt_xmm && (reg->name == VV_XMM0 || reg->name == VV_XMM1))
+            reg->value.words[1] = 0;
+    }
+    return 0;
+}
+
+static enum hv_translate_gva_result_code translate_page(struct mock_partition *partition,
+                                                        uint64_t gva_page, uint64_t flags,
+                                                        uint64_t *gpa_page)
+{
+    assert(partition->memory.size && (partition->cr0[0] & UINT64_C(0x80000000)));
+    assert(partition->cr4[0] & 0x20);
+    assert((partition->efer[0] & 0x500) == 0x500);
+    const unsigned shifts[] = {39, 30, 21, 12};
+    uint64_t table = partition->cr3[0];
+    uint64_t base = partition->memory.guest_pfn * MSHV_HV_PAGE_SIZE;
+    uint64_t gva = gva_page * MSHV_HV_PAGE_SIZE;
+    int writable = 1;
+    for (unsigned level = 0; level < sizeof(shifts) / sizeof(shifts[0]); ++level) {
+        uint64_t offset = table - base + ((gva >> shifts[level]) & 511) * sizeof(uint64_t);
+        assert(table >= base && offset < partition->memory.size);
+        const uint64_t *entry = (const uint64_t *)(uintptr_t)
+            (partition->memory.userspace_addr + offset);
+        if (!(*entry & 1))
+            return corrupt_translation == 3 ? HV_TRANSLATE_GVA_PRIVILEGE_VIOLATION :
+                                             HV_TRANSLATE_GVA_PAGE_NOT_PRESENT;
+        writable &= !!(*entry & 2);
+        table = *entry & ~UINT64_C(0xfff);
+    }
+    if ((flags & HV_TRANSLATE_GVA_VALIDATE_WRITE) && !writable &&
+        (partition->cr0[0] & UINT64_C(0x10000)))
+        return HV_TRANSLATE_GVA_PRIVILEGE_VIOLATION;
+    *gpa_page = table / MSHV_HV_PAGE_SIZE + (corrupt_translation == 2);
+    return HV_TRANSLATE_GVA_SUCCESS;
+}
+
+static int mock_hvcall(int owner, struct mshv_root_hvcall *args)
+{
+    if (!args)
+        return reject(EFAULT);
+    assert(args->in_ptr && args->in_sz <= MSHV_HV_PAGE_SIZE &&
+           args->out_sz <= MSHV_HV_PAGE_SIZE && args->status == 0);
+    struct mock_partition *partition = &partitions[owner];
+    if (args->code == HVCALL_SET_PARTITION_PROPERTY) {
+        const struct hv_input_set_partition_property *input = (const void *)(uintptr_t)args->in_ptr;
+        assert(args->in_sz == sizeof(*input) && !args->reps && !partition->initialized);
+        if (input->property_code == HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES) {
+            if (input->property_value & VV_HV_FEATURE_SYNIC)
+                assert(partition->flags & (1U << MSHV_PT_BIT_LAPIC));
+            partition->features = input->property_value;
+        } else {
+            assert(input->property_code == HV_PARTITION_PROPERTY_PRIVILEGE_FLAGS &&
+                   input->property_value == 0);
+        }
+        return 0;
+    }
+    if (args->code == HVCALL_TRANSLATE_VIRTUAL_ADDRESS) {
+        const struct hv_input_translate_gva *input = (const void *)(uintptr_t)args->in_ptr;
+        struct hv_output_translate_gva *output = (void *)(uintptr_t)args->out_ptr;
+        assert(args->in_sz == sizeof(*input) && args->out_sz == sizeof(*output));
+        output->result = translate_page(partition, input->gva_page, input->flags, &output->gpa_page);
+        return 0;
+    }
+    assert(args->code == HVCALL_GET_VP_REGISTERS || args->code == HVCALL_SET_VP_REGISTERS);
+    const struct hv_vp_register_header *header = (const void *)(uintptr_t)args->in_ptr;
+    assert(header->vp_index < 2 && partition->vp_created[header->vp_index]);
+    const void *elements = (const char *)header + sizeof(*header);
+    unsigned count = args->reps;
+    args->reps = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        struct hv_register_assoc reg;
+        int set = args->code == HVCALL_SET_VP_REGISTERS;
+        if (set)
+            reg = ((const struct hv_register_assoc *)elements)[i];
+        else
+            reg = (struct hv_register_assoc){.name = ((const uint32_t *)elements)[i]};
+        if (access_register(partition, header->vp_index, &reg, set)) {
+            args->status = missing_hv_status ? 0 : 0x50;
+            return -1;
+        }
+        if (!set)
+            ((union hv_register_value *)(uintptr_t)args->out_ptr)[i] = reg.value;
+        ++args->reps;
+    }
+    if (short_reps && count)
+        --args->reps;
+    return 0;
+}
+
 static int mock_ioctl(int fd, unsigned long request, void *arg)
 {
     if (fd < 0 || fd >= (int)(sizeof(types) / sizeof(types[0])) || !types[fd])
@@ -237,6 +387,7 @@ static int mock_ioctl(int fd, unsigned long request, void *arg)
             assert(owner < sizeof(partitions) / sizeof(partitions[0]));
             partitions[owner].references = 1;
             partitions[owner].initialized = 0;
+            partitions[owner].flags = args->pt_flags;
             ++references;
             return allocate(2, 0, owner);
         }
@@ -278,6 +429,7 @@ static int mock_ioctl(int fd, unsigned long request, void *arg)
                 return reject(EMFILE);
             }
             partition->vp_created[args->vp_index] = 1;
+            partition->rflags[args->vp_index] = 2;
             ++partition->references;
             ++references;
             return allocate(3, args->vp_index, owners[fd]);
@@ -288,6 +440,9 @@ static int mock_ioctl(int fd, unsigned long request, void *arg)
             struct mshv_user_mem_region *m = arg;
             if (!m->size || (m->size % 4096) || (m->userspace_addr % 4096) || (m->flags & ~0x07))
                 return reject(EINVAL);
+            partitions[owners[fd]].memory = *m;
+            if (m->flags & (1U << MSHV_SET_MEM_BIT_UNMAP))
+                partitions[owners[fd]].memory.size = 0;
             return 0;
         }
         if (request == MSHV_IRQFD) {
@@ -310,6 +465,8 @@ static int mock_ioctl(int fd, unsigned long request, void *arg)
                 return reject(EINVAL);
             return 0;
         }
+        if (request == MSHV_ROOT_HVCALL)
+            return mock_hvcall(owners[fd], arg);
         if (!arg && request != MSHV_SCRUB_PARTITION)
             return reject(EFAULT);
         return 0;
@@ -324,11 +481,56 @@ static int mock_ioctl(int fd, unsigned long request, void *arg)
         struct mshv_get_set_vp_state *s = arg;
         if (s->type >= 5 || !s->buf_sz || (s->buf_sz % 4096) || (s->buf_ptr % 4096))
             return reject(EINVAL);
+        if (s->type == MSHV_VP_STATE_SIMP || s->type == MSHV_VP_STATE_SIEFP) {
+            uint8_t *page = (void *)(uintptr_t)s->buf_ptr;
+            memset(page, 0, MSHV_HV_PAGE_SIZE);
+            if (corrupt_synic == 1)
+                page[MSHV_HV_PAGE_SIZE - 1] = 1;
+            s->buf_sz = MSHV_HV_PAGE_SIZE - (corrupt_synic == 2);
+        }
         return 0;
     }
     if (request == MSHV_GET_VP_CPUID_VALUES) {
         if (!arg)
             return reject(EFAULT);
+        struct mshv_get_vp_cpuid_values *cpuid = arg;
+        uint64_t features = partitions[owners[fd]].features;
+        cpuid->eax = cpuid->ebx = cpuid->ecx = cpuid->edx = 0;
+        switch (cpuid->function) {
+        case VV_X86_CPUID_FEATURES:
+            if ((features & VV_HV_FEATURE_HYPERVISOR_PRESENT) && corrupt_cpuid != 3)
+                cpuid->ecx = HYPERV_HYPERVISOR_PRESENT_BIT;
+            break;
+        case HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS:
+            cpuid->eax = corrupt_cpuid == 4 ? HYPERV_CPUID_INTERFACE : HYPERV_CPUID_IMPLEMENTATION_LIMITS;
+            break;
+        case HYPERV_CPUID_INTERFACE:
+            cpuid->eax = VV_HYPERV_INTERFACE_HV1_SIGNATURE ^ (corrupt_cpuid == 1);
+            break;
+        case HYPERV_CPUID_FEATURES:
+            cpuid->eax = features & VV_HV_FEATURE_VP_INDEX ? VV_HV_CPUID_ACCESS_VP_INDEX : 0;
+            if (corrupt_cpuid == 2)
+                cpuid->eax ^= VV_HV_CPUID_ACCESS_VP_INDEX;
+            if (corrupt_cpuid == 5)
+                cpuid->ebx = HV_CREATE_PARTITIONS;
+            break;
+        default:
+            assert(0);
+        }
+        return 0;
+    }
+    if (request == MSHV_ROOT_HVCALL)
+        return mock_hvcall(owners[fd], arg);
+    if (request == MSHV_TRANSLATE_GVA) {
+        if (!arg)
+            return reject(EFAULT);
+        struct mshv_translate_gva *translate = arg;
+        uint64_t page = 0;
+        *translate->result = translate_page(&partitions[owners[fd]],
+                                            translate->gva / MSHV_HV_PAGE_SIZE,
+                                            translate->flags, &page);
+        *translate->gpa = page * MSHV_HV_PAGE_SIZE |
+                          ((translate->gva & UINT64_C(0xfff)) ^ (corrupt_translation == 1));
         return 0;
     }
     if (request == MSHV_GET_VP_REGISTERS || request == MSHV_SET_VP_REGISTERS) {
@@ -345,12 +547,8 @@ static int mock_ioctl(int fd, unsigned long request, void *arg)
             if (request == MSHV_SET_VP_REGISTERS &&
                 (reg->name == VV_EXPLICIT_SUSPEND || reg->name == VV_INTERCEPT_SUSPEND))
                 return reject(EINVAL);
-            assert(reg->name >= VV_RAX && reg->name <= VV_RBX);
-            unsigned n = reg->name - VV_RAX;
-            if (request == MSHV_SET_VP_REGISTERS)
-                partition->values[indices[fd]][n] = reg->value.reg64;
-            else
-                reg->value.reg64 = partition->values[indices[fd]][n] ^ corrupt_read;
+            if (access_register(partition, indices[fd], reg, request == MSHV_SET_VP_REGISTERS))
+                return -1;
         }
         return 0;
     }

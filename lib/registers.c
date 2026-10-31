@@ -74,3 +74,48 @@ test_result_t mshv_roundtrip(struct mshv_fixture *f, unsigned count, uint64_t se
         return TEST_FAIL;
     return mshv_check_gprs(f, count, seed);
 }
+
+test_result_t mshv_get_registers(int fd, uint32_t vp_index, const uint32_t *names,
+                                 union hv_register_value *values, unsigned count)
+{
+    enum { MAX_COUNT = MSHV_HV_PAGE_SIZE / sizeof(union hv_register_value) };
+    struct {
+        struct hv_vp_register_header header;
+        uint32_t names[MAX_COUNT];
+    } input = {.header.vp_index = vp_index};
+
+    if (!count || count > MAX_COUNT)
+        TFAIL("internal hypercall GET count: expected 1..%u, actual %u", MAX_COUNT, count);
+    memcpy(input.names, names, count * sizeof(*names));
+    struct mshv_root_hvcall args = {
+        .code = HVCALL_GET_VP_REGISTERS,
+        .reps = count,
+        .in_sz = sizeof(input.header) + count * sizeof(*names),
+        .out_sz = count * sizeof(*values),
+        .in_ptr = (uintptr_t)&input,
+        .out_ptr = (uintptr_t)values,
+    };
+    return mshv_expect_hvcall(fd, &args, "GET VP registers", VV_HVCALL_SUCCESS);
+}
+
+test_result_t mshv_set_registers(int fd, uint32_t vp_index,
+                                 const struct hv_register_assoc *regs, unsigned count)
+{
+    enum { MAX_COUNT = (MSHV_HV_PAGE_SIZE - sizeof(struct hv_vp_register_header)) /
+                       sizeof(struct hv_register_assoc) };
+    struct {
+        struct hv_vp_register_header header;
+        struct hv_register_assoc regs[MAX_COUNT];
+    } input = {.header.vp_index = vp_index};
+
+    if (!count || count > MAX_COUNT)
+        TFAIL("internal hypercall SET count: expected 1..%u, actual %u", MAX_COUNT, count);
+    memcpy(input.regs, regs, count * sizeof(*regs));
+    struct mshv_root_hvcall args = {
+        .code = HVCALL_SET_VP_REGISTERS,
+        .reps = count,
+        .in_sz = sizeof(input.header) + count * sizeof(*regs),
+        .in_ptr = (uintptr_t)&input,
+    };
+    return mshv_expect_hvcall(fd, &args, "SET VP registers", VV_HVCALL_SUCCESS);
+}

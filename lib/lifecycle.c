@@ -73,6 +73,30 @@ test_result_t mshv_expect_ioctl(int fd, unsigned long request, void *arg,
     return TEST_PASS;
 }
 
+test_result_t mshv_expect_hvcall(int fd, struct mshv_root_hvcall *args,
+                                 const char *operation, enum vv_hvcall_expectation expected)
+{
+    uint16_t requested_reps = args->reps;
+    errno = 0;
+    int rc = ioctl(fd, MSHV_ROOT_HVCALL, args);
+    int actual_errno = errno;
+    printf("mshv-hvcall %s code=0x%04x rc=%d errno=%d status=0x%04x reps=%u/%u\n",
+           operation, args->code, rc, actual_errno, args->status, args->reps, requested_reps);
+    if (expected == VV_HVCALL_SUCCESS) {
+        if (rc != 0 || args->status != 0 || args->reps != requested_reps)
+            TFAIL("%s: expected hypercall success and %u completed reps, "
+                  "actual rc=%d errno=%d (%s) status=0x%04x reps=%u",
+                  operation, requested_reps, rc, actual_errno, strerror(actual_errno),
+                  args->status, args->reps);
+    } else {
+        if (rc != -1 || !actual_errno || !args->status || args->reps != 0)
+            TFAIL("%s: expected hypervisor rejection and zero completed reps, "
+                  "actual rc=%d errno=%d (%s) status=0x%04x reps=%u",
+                  operation, rc, actual_errno, strerror(actual_errno), args->status, args->reps);
+    }
+    return TEST_PASS;
+}
+
 test_result_t mshv_close(int *fd, const char *operation)
 {
     if (*fd < 0)
@@ -122,25 +146,57 @@ test_result_t mshv_check_fd(int fd, const char *operation, ...)
     return TEST_FAIL;
 }
 
-test_result_t mshv_create(struct mshv_fixture *f)
+static test_result_t open_partition(struct mshv_fixture *f, uint64_t flags)
 {
     struct mshv_create_partition partition = {
-        .pt_flags = VV_MSHV_PARTITION_FLAGS_NONE,
+        .pt_flags = flags,
         .pt_isolation = MSHV_PT_ISOLATION_NONE,
     };
-    struct mshv_create_vp vp = {.vp_index = 0};
-
     f->device = open("/dev/mshv", O_RDWR | O_CLOEXEC);
     if (mshv_check_fd(f->device, "open /dev/mshv") != TEST_PASS)
         return TEST_FAIL;
     f->partition = ioctl(f->device, MSHV_CREATE_PARTITION, &partition);
-    if (mshv_check_fd(f->partition,
-                      "MSHV_CREATE_PARTITION flags=0x%" PRIx64 " isolation=0x%" PRIx64,
-                      (uint64_t)partition.pt_flags, (uint64_t)partition.pt_isolation) != TEST_PASS)
-        return TEST_FAIL;
+    return mshv_check_fd(f->partition,
+                         "MSHV_CREATE_PARTITION flags=0x%" PRIx64 " isolation=0x%" PRIx64,
+                         (uint64_t)partition.pt_flags, (uint64_t)partition.pt_isolation);
+}
+
+static test_result_t initialize_partition(struct mshv_fixture *f)
+{
+    struct mshv_create_vp vp = {.vp_index = 0};
+
     if (mshv_expect_ioctl(f->partition, MSHV_INITIALIZE_PARTITION, NULL,
                           "MSHV_INITIALIZE_PARTITION", 0) != TEST_PASS)
         return TEST_FAIL;
     f->vp = ioctl(f->partition, MSHV_CREATE_VP, &vp);
     return mshv_check_fd(f->vp, "MSHV_CREATE_VP index=%u", vp.vp_index);
+}
+
+test_result_t mshv_create(struct mshv_fixture *f)
+{
+    if (open_partition(f, VV_MSHV_PARTITION_FLAGS_NONE) != TEST_PASS)
+        return TEST_FAIL;
+    return initialize_partition(f);
+}
+
+test_result_t mshv_create_configured(struct mshv_fixture *f, uint64_t flags, uint64_t features)
+{
+    const struct hv_input_set_partition_property properties[] = {
+        {.property_code = HV_PARTITION_PROPERTY_PRIVILEGE_FLAGS, .property_value = 0},
+        {.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES,
+         .property_value = features},
+    };
+    if (open_partition(f, flags) != TEST_PASS)
+        return TEST_FAIL;
+    for (unsigned i = 0; i < sizeof(properties) / sizeof(properties[0]); ++i) {
+        struct mshv_root_hvcall args = {
+            .code = HVCALL_SET_PARTITION_PROPERTY,
+            .in_sz = sizeof(properties[i]),
+            .in_ptr = (uintptr_t)&properties[i],
+        };
+        if (mshv_expect_hvcall(f->partition, &args,
+                                "configure child partition property", VV_HVCALL_SUCCESS) != TEST_PASS)
+            return TEST_FAIL;
+    }
+    return initialize_partition(f);
 }

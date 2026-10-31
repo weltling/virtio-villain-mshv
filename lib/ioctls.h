@@ -55,6 +55,14 @@ struct mshv_user_mem_region {
     uint8_t rsvd[7];
 };
 
+enum {
+    MSHV_SET_MEM_BIT_WRITABLE,
+    MSHV_SET_MEM_BIT_EXECUTABLE,
+    MSHV_SET_MEM_BIT_UNMAP,
+};
+
+#define MSHV_HV_PAGE_SIZE 0x1000
+
 struct mshv_user_irqfd {
     int32_t fd;
     int32_t resamplefd;
@@ -83,6 +91,32 @@ struct mshv_get_set_vp_state {
     uint64_t buf_ptr;
 };
 
+enum {
+    MSHV_VP_STATE_LAPIC,
+    MSHV_VP_STATE_XSAVE,
+    MSHV_VP_STATE_SIMP,
+    MSHV_VP_STATE_SIEFP,
+    MSHV_VP_STATE_SYNTHETIC_TIMERS,
+};
+
+struct mshv_root_hvcall {
+    uint16_t code;
+    uint16_t reps;
+    uint16_t in_sz;
+    uint16_t out_sz;
+    uint16_t status;
+    uint8_t rsvd[6];
+    uint64_t in_ptr;
+    uint64_t out_ptr;
+};
+
+struct mshv_translate_gva {
+    uint64_t gva;
+    uint64_t flags;
+    enum hv_translate_gva_result_code *result;
+    uint64_t *gpa;
+};
+
 struct mshv_get_vp_cpuid_values {
     uint32_t function;
     uint32_t index;
@@ -106,7 +140,7 @@ struct mshv_get_vp_cpuid_values {
 #define MSHV_IOEVENTFD _IOW(MSHV_IOCTL, 0x04, struct mshv_user_ioeventfd)
 #define MSHV_SET_MSI_ROUTING 0x4008b805UL
 #define MSHV_GET_GPAP_ACCESS_BITMAP 0xc020b806UL
-#define MSHV_ROOT_HVCALL 0xc020b807UL
+#define MSHV_ROOT_HVCALL _IOWR(MSHV_IOCTL, 0x07, struct mshv_root_hvcall)
 #define MSHV_CREATE_DEVICE 0xc00cb808UL
 #define MSHV_MODIFY_GPA_HOST_ACCESS 0x4010b809UL
 #define MSHV_IMPORT_ISOLATED_PAGES 0x4010b80aUL
@@ -125,7 +159,7 @@ struct mshv_get_vp_cpuid_values {
 #define MSHV_RUN_VP 0x8100b800UL
 #define MSHV_GET_VP_STATE _IOWR(MSHV_IOCTL, 0x01, struct mshv_get_set_vp_state)
 #define MSHV_SET_VP_STATE _IOWR(MSHV_IOCTL, 0x02, struct mshv_get_set_vp_state)
-#define MSHV_TRANSLATE_GVA 0xc020b8f2UL
+#define MSHV_TRANSLATE_GVA _IOWR(MSHV_IOCTL, 0xf2, struct mshv_translate_gva)
 #define MSHV_GET_VP_REGISTERS _IOWR(MSHV_IOCTL, 0xf0, struct mshv_vp_registers)
 #define MSHV_SET_VP_REGISTERS _IOW(MSHV_IOCTL, 0xf1, struct mshv_vp_registers)
 #define MSHV_VP_REGISTER_INTERCEPT_RESULT 0x4038b8f3UL
