@@ -733,6 +733,9 @@ int main(void)
 
     const struct vv_test_entry *lifecycle = NULL, *single = NULL, *negative = NULL;
     const struct vv_test_entry *isolation = NULL, *concurrent = NULL, *unwind = NULL;
+    const char *tlfs_names[] = {"TL0001"};
+    const struct vv_test_entry *tlfs[1] = {0};
+    int tlfs_calls[1], tlfs_opens[1], tlfs_closes[1], tlfs_fds[1];
     int isolation_calls = 0, isolation_opens = 0, isolation_closes = 0, isolation_fds = 0;
     int concurrent_opens = 0, concurrent_closes = 0, concurrent_fds = 0;
     int unwind_calls = 0, unwind_opens = 0, unwind_closes = 0, unwind_fds = 0;
@@ -740,6 +743,15 @@ int main(void)
     for (const struct vv_test_entry *test = __start_mshv_registry;
          test < __stop_mshv_registry; ++test) {
         assert(execute(test) == TEST_PASS);
+        for (unsigned i = 0; i < sizeof(tlfs) / sizeof(tlfs[0]); ++i) {
+            if (!strcmp(test->name, tlfs_names[i])) {
+                tlfs[i] = test;
+                tlfs_calls[i] = calls;
+                tlfs_opens[i] = opens;
+                tlfs_closes[i] = closes;
+                tlfs_fds[i] = fd_checks;
+            }
+        }
         if (!strcmp(test->name, "ML0001"))
             lifecycle = test;
         if (!strcmp(test->name, "MR0001"))
@@ -903,6 +915,40 @@ int main(void)
     unexpected_creation = 0;
     assert(execute(unwind) == TEST_PASS);
     puts("mshv unwind mock checks passed");
+    for (unsigned i = 0; i < sizeof(tlfs) / sizeof(tlfs[0]); ++i) {
+        assert(tlfs[i]);
+        for (int step = 1; step <= tlfs_calls[i]; ++step) {
+            fail_at = step;
+            assert(execute(tlfs[i]) == TEST_FAIL);
+        }
+        fail_at = 0;
+        for (int step = 1; step <= tlfs_opens[i]; ++step) {
+            fail_open_at = step;
+            assert(execute(tlfs[i]) == TEST_FAIL);
+        }
+        fail_open_at = 0;
+        for (int step = 1; step <= tlfs_fds[i]; ++step) {
+            fail_fd_at = step;
+            assert(execute(tlfs[i]) == TEST_FAIL);
+        }
+        fail_fd_at = 0;
+        for (int step = 1; step <= tlfs_closes[i]; ++step) {
+            fail_close_at = step;
+            assert(execute(tlfs[i]) == TEST_FAIL);
+        }
+        fail_close_at = 0;
+        assert(execute(tlfs[i]) == TEST_PASS);
+    }
+    corrupt_high = 1;
+    assert(execute(tlfs[0]) == TEST_FAIL);
+    corrupt_high = 0;
+    corrupt_xmm = 1;
+    assert(execute(tlfs[0]) == TEST_FAIL);
+    corrupt_xmm = 0;
+    short_reps = 1;
+    assert(execute(tlfs[0]) == TEST_FAIL);
+    short_reps = 0;
+    puts("mshv TLFS mock checks passed");
     struct mshv_fixture f = {.device = -1, .partition = -1, .vp = -1};
     assert(mshv_roundtrip(&f, 0, 0) == TEST_FAIL);
     assert(mshv_roundtrip(&f, 5, 0) == TEST_FAIL);
